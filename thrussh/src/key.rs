@@ -29,6 +29,7 @@ impl PubKey for PublicKey {
                 buffer.extend_ssh_string(ED25519.0.as_bytes());
                 buffer.extend_ssh_string(&public.key);
             }
+            #[cfg(feature = "openssl")]
             &PublicKey::RSA { ref key, .. } => {
                 let rsa = key.0.rsa().unwrap();
                 let e = rsa.e().to_vec();
@@ -51,6 +52,7 @@ impl PubKey for KeyPair {
                 buffer.extend_ssh_string(ED25519.0.as_bytes());
                 buffer.extend_ssh_string(public);
             }
+            #[cfg(feature = "openssl")]
             &KeyPair::RSA { ref key, .. } => {
                 let e = key.e().to_vec();
                 let n = key.n().to_vec();

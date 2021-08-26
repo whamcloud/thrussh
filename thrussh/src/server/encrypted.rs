@@ -32,8 +32,10 @@ impl Session {
         handler: &mut Option<H>,
         buf: &[u8],
     ) -> Result<Self, H::Error> {
-        let instant = tokio::time::Instant::now() + self.common.config.auth_rejection_time;
-        debug!("read_encrypted");
+        debug!(
+            "server_read_encrypted, buf = {:?}",
+            &buf[..buf.len().min(20)]
+        );
         // Either this packet is a KEXINIT, in which case we start a key re-exchange.
 
         let mut enc = self.common.encrypted.as_mut().unwrap();
@@ -47,7 +49,6 @@ impl Session {
                     buf,
                     &mut self.common.write_buffer,
                 )?);
-                self.flush()?;
             } else if let Some(exchange) = enc.exchange.take() {
                 let kexinit = KexInit::received_rekey(
                     exchange,
@@ -61,6 +62,7 @@ impl Session {
                     &mut self.common.write_buffer,
                 )?);
             }
+            self.flush()?;
             return Ok(self);
         }
 
@@ -72,19 +74,52 @@ impl Session {
                     buf,
                     &mut self.common.write_buffer,
                 )?);
+                self.flush()?;
                 return Ok(self);
             }
             Some(Kex::NewKeys(newkeys)) => {
                 if buf[0] != msg::NEWKEYS {
                     return Err(Error::Kex.into());
                 }
+                self.common.write_buffer.bytes = 0;
+                enc.last_rekey = std::time::Instant::now();
+
                 // Ok, NEWKEYS received, now encrypted.
+                enc.flush_all_pending();
+                let mut pending = std::mem::replace(&mut self.pending_reads, Vec::new());
+                for p in pending.drain(..) {
+                    self = self.process_packet(handler, &p).await?
+                }
+                self.pending_reads = pending;
+                self.pending_len = 0;
                 self.common.newkeys(newkeys);
+                self.flush()?;
                 return Ok(self);
             }
-            rek => enc.rekey = rek,
+            Some(Kex::KexInit(k)) => {
+                enc.rekey = Some(Kex::KexInit(k));
+                self.pending_len += buf.len() as u32;
+                if self.pending_len > 2 * self.target_window_size {
+                    return Err(Error::Pending.into())
+                }
+                self.pending_reads.push(CryptoVec::from_slice(buf));
+                return Ok(self);
+            }
+            rek => {
+                debug!("rek = {:?}", rek);
+                enc.rekey = rek
+            },
         }
+        self.process_packet(handler, buf).await
+    }
 
+    async fn process_packet<H: Handler>(
+        mut self,
+        handler: &mut Option<H>,
+        buf: &[u8],
+    ) -> Result<Self, H::Error> {
+        let instant = tokio::time::Instant::now() + self.common.config.auth_rejection_time;
+        let mut enc = self.common.encrypted.as_mut().unwrap();
         // If we've successfully read a packet.
         match enc.state {
             EncryptedState::WaitingServiceRequest {

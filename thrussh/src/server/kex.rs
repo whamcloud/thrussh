@@ -90,7 +90,7 @@ impl KexDh {
                 names: self.names,
                 session_id: self.session_id,
             };
-            let hash: Result<openssl::hash::DigestBytes, Error> = HASH_BUF.with(|buffer| {
+            let hash: Result<_, Error> = HASH_BUF.with(|buffer| {
                 let mut buffer = buffer.borrow_mut();
                 buffer.clear();
                 debug!("server kexdhdone.exchange = {:?}", kexdhdone.exchange);

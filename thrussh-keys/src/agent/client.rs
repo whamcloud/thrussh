@@ -47,7 +47,10 @@ impl AgentClient<tokio::net::UnixStream> {
         } else {
             return Err(Error::EnvVar("SSH_AUTH_SOCK"));
         };
-        Self::connect_uds(var).await
+        match Self::connect_uds(var).await {
+            Err(Error::IO(io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => Err(Error::BadAuthSock),
+            owise => owise
+        }
     }
 }
 
@@ -103,6 +106,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
                 self.buf.extend(&secret.key);
                 self.buf.extend_ssh_string(b"");
             }
+            #[cfg(feature = "openssl")]
             key::KeyPair::RSA { ref key, .. } => {
                 self.buf.extend_ssh_string(b"ssh-rsa");
                 self.buf.extend_ssh_mpint(&key.n().to_vec());
@@ -237,6 +241,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
                 let t = r.read_string()?;
                 debug!("t = {:?}", std::str::from_utf8(t));
                 match t {
+                    #[cfg(feature = "openssl")]
                     b"ssh-rsa" => {
                         let e = r.read_mpint()?;
                         let n = r.read_mpint()?;
@@ -304,6 +309,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
         self.buf.extend_ssh_string(data);
         debug!("public = {:?}", public);
         let hash = match public {
+            #[cfg(feature = "openssl")]
             PublicKey::RSA { hash, .. } => match hash {
                 SignatureHash::SHA2_256 => 2,
                 SignatureHash::SHA2_512 => 4,
@@ -358,15 +364,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
         mut self,
         public: &key::PublicKey,
         data: &[u8],
-    ) -> impl futures::Future<Output = Result<(Self, crate::signature::Signature), Error>> {
+    ) -> impl futures::Future<Output = (Self, Result<crate::signature::Signature, Error>)> {
         debug!("sign_request: {:?}", data);
         self.prepare_sign_request(public, data);
 
         async move {
-            self.read_response().await?;
+            if let Err(e) = self.read_response().await {
+                return (self, Err(e));
+            }
             if !self.buf.is_empty() && self.buf[0] == msg::SIGN_RESPONSE {
-                let sig: Result<crate::signature::Signature, Error> = {
-                    let mut r = self.buf.reader(1);
+                let as_sig = |buf: &CryptoVec| -> Result<crate::signature::Signature, Error> {
+                    let mut r = buf.reader(1);
                     let mut resp = r.read_string()?.reader(0);
                     let typ = resp.read_string()?;
                     let sig = resp.read_string()?;
@@ -393,9 +401,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
                         .into()),
                     }
                 };
-                Ok((self, sig?))
+                let sig = as_sig(&self.buf);
+                (self, sig)
             } else {
-                Err(Error::AgentProtocolError.into())
+                (self, Err(Error::AgentProtocolError.into()))
             }
         }
     }
@@ -467,6 +476,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
 
 fn key_blob(public: &key::PublicKey, buf: &mut CryptoVec) {
     match *public {
+        #[cfg(feature = "openssl")]
         PublicKey::RSA { ref key, .. } => {
             buf.extend(&[0, 0, 0, 0]);
             let len0 = buf.len();

@@ -37,7 +37,7 @@ impl super::Session {
     ) -> Result<Self, C::Error> {
         debug!(
             "client_read_encrypted, buf = {:?}",
-            &buf[..buf.len().min(100)]
+            &buf[..buf.len().min(20)]
         );
         // Either this packet is a KEXINIT, in which case we start a key re-exchange.
         if buf[0] == msg::KEXINIT {
@@ -51,7 +51,6 @@ impl super::Session {
                         buf,
                         &mut self.common.write_buffer,
                     )?));
-                    self.flush()?;
                 } else if let Some(exchange) = std::mem::replace(&mut enc.exchange, None) {
                     let kexinit = KexInit::received_rekey(
                         exchange,
@@ -68,6 +67,7 @@ impl super::Session {
             } else {
                 unreachable!()
             }
+            self.flush()?;
             return Ok(self);
         }
 
@@ -99,13 +99,37 @@ impl super::Session {
                     enc.last_rekey = std::time::Instant::now();
 
                     // Ok, NEWKEYS received, now encrypted.
+                    enc.flush_all_pending();
+                    let mut pending = std::mem::replace(&mut self.pending_reads, Vec::new());
+                    for p in pending.drain(..) {
+                        self = self.process_packet(client, &p).await?
+                    }
+                    self.pending_reads = pending;
+                    self.pending_len = 0;
                     self.common.newkeys(newkeys);
+                    self.flush()?;
+                    return Ok(self);
+                }
+                Some(Kex::KexInit(k)) => {
+                    enc.rekey = Some(Kex::KexInit(k));
+                    self.pending_len += buf.len() as u32;
+                    if self.pending_len > 2 * self.target_window_size {
+                        return Err(Error::Pending.into())
+                    }
+                    self.pending_reads.push(CryptoVec::from_slice(buf));
                     return Ok(self);
                 }
                 rek => enc.rekey = rek,
             }
         }
+        self.process_packet(client, buf).await
+    }
 
+    async fn process_packet<H: super::Handler>(
+        mut self,
+        client: &mut Option<H>,
+        buf: &[u8],
+    ) -> Result<Self, H::Error> {
         // If we've successfully read a packet.
         debug!("buf = {:?} bytes", buf.len());
         trace!("buf = {:?}", buf);
@@ -424,7 +448,21 @@ impl super::Session {
                         .await?
                     }
                     _ => {
-                        info!("Unknown channel request {:?}", std::str::from_utf8(req));
+                        let wants_reply = r.read_byte().map_err(crate::Error::from)?;
+                        if wants_reply == 1 {
+                            if let Some(ref mut enc) = self.common.encrypted {
+                                self.common.wants_reply = false;
+                                push_packet!(enc.write, {
+                                    enc.write.push(msg::CHANNEL_FAILURE);
+                                    enc.write.push_u32_be(channel_num.0)
+                                })
+                            }
+                        }
+                        info!(
+                            "Unknown channel request {:?} {:?}",
+                            std::str::from_utf8(req),
+                            wants_reply
+                        );
                         (cl, self)
                     }
                 };
@@ -454,7 +492,16 @@ impl super::Session {
             msg::GLOBAL_REQUEST => {
                 let mut r = buf.reader(1);
                 let req = r.read_string().map_err(crate::Error::from)?;
-                info!("Unhandled global request: {:?}", std::str::from_utf8(req));
+                let wants_reply = r.read_byte().map_err(crate::Error::from)?;
+                if let Some(ref mut enc) = self.common.encrypted {
+                    self.common.wants_reply = false;
+                    push_packet!(enc.write, enc.write.push(msg::REQUEST_FAILURE))
+                }
+                info!(
+                    "Unhandled global request: {:?} {:?}",
+                    std::str::from_utf8(req),
+                    wants_reply
+                );
                 Ok(self)
             }
             msg::CHANNEL_SUCCESS => {

@@ -8,7 +8,7 @@
 
 use crate::blowfish::*;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
-use openssl::sha::Sha512;
+use sha2::{Sha512, Digest};
 
 fn bcrypt_hash(hpass: &[u8], hsalt: &[u8], output: &mut [u8; 32]) {
     let mut bf = Blowfish::init_state();
@@ -51,7 +51,7 @@ pub fn bcrypt_pbkdf(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u8]
     let hpass = {
         let mut hasher = Sha512::new();
         hasher.update(password);
-        hasher.finish()
+        hasher.finalize()
     };
 
     for block in 1..(nblocks + 1) {
@@ -62,15 +62,15 @@ pub fn bcrypt_pbkdf(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u8]
         let mut hasher = Sha512::new();
         hasher.update(salt);
         hasher.update(&count);
-        let hsalt = hasher.finish();
+        let hsalt = hasher.finalize();
 
         bcrypt_hash(hpass.as_ref(), hsalt.as_ref(), &mut out);
         let mut tmp = out;
 
         for _ in 1..rounds {
-            let mut hasher = Sha512::new();
+            let mut hasher = sha2::Sha512::new();
             hasher.update(&tmp);
-            let hsalt = hasher.finish();
+            let hsalt = hasher.finalize();
 
             bcrypt_hash(hpass.as_ref(), hsalt.as_ref(), &mut tmp);
             for i in 0..out.len() {

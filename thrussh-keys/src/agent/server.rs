@@ -1,5 +1,6 @@
 use crate::encoding::{Encoding, Position, Reader};
 use crate::key;
+#[cfg(feature = "openssl")]
 use crate::key::SignatureHash;
 use byteorder::{BigEndian, ByteOrder};
 use cryptovec::CryptoVec;
@@ -253,6 +254,7 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static, A: Agent + Send + 'stat
                 writebuf.push(msg::SUCCESS);
                 (self.buf[pos0..pos1].to_vec(), key::KeyPair::Ed25519(secret))
             }
+            #[cfg(feature = "openssl")]
             b"ssh-rsa" => {
                 use openssl::bn::{BigNum, BigNumContext};
                 use openssl::rsa::Rsa;

@@ -18,9 +18,9 @@ use thrussh_keys::key;
 // use super::mac; // unimplemented
 use crate::compression::*;
 use cryptovec::CryptoVec;
-use openssl::rand;
 use thrussh_keys::encoding::{Encoding, Reader};
 use thrussh_keys::key::{KeyPair, PublicKey};
+use rand::RngCore;
 
 #[derive(Debug)]
 pub struct Names {
@@ -49,9 +49,19 @@ pub struct Preferred {
 }
 
 impl Preferred {
+    #[cfg(feature = "openssl")]
     pub const DEFAULT: Preferred = Preferred {
         kex: &[kex::CURVE25519],
         key: &[key::ED25519, key::RSA_SHA2_256, key::RSA_SHA2_512],
+        cipher: &[cipher::chacha20poly1305::NAME],
+        mac: &["none"],
+        compression: &["none", "zlib", "zlib@openssh.com"],
+    };
+
+    #[cfg(not(feature = "openssl"))]
+    pub const DEFAULT: Preferred = Preferred {
+        kex: &[kex::CURVE25519],
+        key: &[key::ED25519],
         cipher: &[cipher::chacha20poly1305::NAME],
         mac: &["none"],
         compression: &["none", "zlib", "zlib@openssh.com"],
@@ -84,12 +94,16 @@ impl Named for () {
     }
 }
 
+#[cfg(feature = "openssl")]
 use thrussh_keys::key::{ED25519, SSH_RSA};
+#[cfg(not(feature = "openssl"))]
+use thrussh_keys::key::{ED25519};
 
 impl Named for PublicKey {
     fn name(&self) -> &'static str {
         match self {
             &PublicKey::Ed25519(_) => ED25519.0,
+            #[cfg(feature = "openssl")]
             &PublicKey::RSA { .. } => SSH_RSA.0,
         }
     }
@@ -99,6 +113,7 @@ impl Named for KeyPair {
     fn name(&self) -> &'static str {
         match self {
             &KeyPair::Ed25519 { .. } => ED25519.0,
+            #[cfg(feature = "openssl")]
             &KeyPair::RSA { ref hash, .. } => hash.name().0,
         }
     }
@@ -226,7 +241,7 @@ pub fn write_kex(prefs: &Preferred, buf: &mut CryptoVec) -> Result<(), Error> {
     buf.push(msg::KEXINIT);
 
     let mut cookie = [0; 16];
-    rand::rand_bytes(&mut cookie)?;
+    rand::thread_rng().fill_bytes(&mut cookie);
 
     buf.extend(&cookie); // cookie
     buf.extend_list(prefs.kex.iter()); // kex algo

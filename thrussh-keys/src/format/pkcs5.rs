@@ -1,31 +1,37 @@
-use super::{decode_rsa, pkcs_unpad, Encryption};
+use super::{pkcs_unpad, Encryption};
 use crate::key;
 use crate::Error;
 
-use openssl::hash::{Hasher, MessageDigest};
-use openssl::symm::{decrypt, Cipher};
+use aes::*;
+use block_modes::block_padding::NoPadding;
+use block_modes::BlockMode;
+type Aes128Cbc = block_modes::Cbc<Aes128, NoPadding>;
 
 /// Decode a secret key in the PKCS#5 format, possible deciphering it
 /// using the supplied password.
+#[cfg(feature = "openssl")]
 pub fn decode_pkcs5(
     secret: &[u8],
-    password: Option<&[u8]>,
+    password: Option<&str>,
     enc: Encryption,
 ) -> Result<key::KeyPair, Error> {
     if let Some(pass) = password {
         let sec = match enc {
             Encryption::Aes128Cbc(ref iv) => {
-                let mut h = Hasher::new(MessageDigest::md5()).unwrap();
-                h.update(pass).unwrap();
-                h.update(&iv[..8]).unwrap();
-                let md5 = h.finish().unwrap();
-                let mut dec = decrypt(Cipher::aes_128_cbc(), &md5, Some(&iv[..]), secret)?;
+                let mut c = md5::Context::new();
+                c.consume(pass.as_bytes());
+                c.consume(&iv[..8]);
+                let md5 = c.compute();
+
+                let c = Aes128Cbc::new_from_slices(&md5.0, &iv[..]).unwrap();
+                let mut dec = secret.to_vec();
+                c.decrypt(&mut dec).unwrap();
                 pkcs_unpad(&mut dec);
                 dec
             }
             Encryption::Aes256Cbc(_) => unimplemented!(),
         };
-        decode_rsa(&sec)
+        super::decode_rsa(&sec)
     } else {
         Err(Error::KeyIsEncrypted.into())
     }

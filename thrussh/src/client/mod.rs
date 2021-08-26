@@ -49,6 +49,8 @@ pub struct Session {
     sender: UnboundedSender<Reply>,
     channels: HashMap<ChannelId, UnboundedSender<OpenChannelMsg>>,
     target_window_size: u32,
+    pending_reads: Vec<CryptoVec>,
+    pending_len: u32,
 }
 
 impl Drop for Session {
@@ -208,6 +210,11 @@ pub struct Channel {
 }
 
 impl<H: Handler> Handle<H> {
+
+    pub fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+
     pub async fn authenticate_password<U: Into<String>, P: Into<String>>(
         &mut self,
         user: U,
@@ -802,6 +809,8 @@ where
         receiver,
         sender: sender2,
         channels: HashMap::new(),
+        pending_reads: Vec::new(),
+        pending_len: 0,
     };
     session.read_ssh_id(sshid)?;
     let (encrypted_signal, encrypted_recv) = tokio::sync::oneshot::channel();

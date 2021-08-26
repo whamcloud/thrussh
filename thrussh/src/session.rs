@@ -18,7 +18,6 @@ use crate::{auth, cipher, kex, msg, negotiation};
 use crate::{Channel, ChannelId, Disconnect, Limits};
 use byteorder::{BigEndian, ByteOrder};
 use cryptovec::CryptoVec;
-use openssl::hash;
 use std::collections::HashMap;
 use std::num::Wrapping;
 use std::sync::Arc;
@@ -33,7 +32,7 @@ pub(crate) struct Encrypted {
     pub kex: kex::Algorithm,
     pub key: usize,
     pub mac: Option<&'static str>,
-    pub session_id: hash::DigestBytes,
+    pub session_id: crate::Sha256Hash,
     pub rekey: Option<Kex>,
     pub channels: HashMap<ChannelId, Channel>,
     pub last_channel_id: Wrapping<u32>,
@@ -182,16 +181,28 @@ impl Encrypted {
     pub fn flush_pending(&mut self, channel: ChannelId) -> usize {
         let mut pending_size = 0;
         if let Some(channel) = self.channels.get_mut(&channel) {
-            while let Some((buf, a, size)) = channel.pending_data.pop_front() {
-                let (buf, size_) = Self::data_noqueue(&mut self.write, channel, buf, size);
-                pending_size += size_;
-                if size_ < buf.len() {
-                    channel.pending_data.push_front((buf, a, size_));
+            while let Some((buf, a, from)) = channel.pending_data.pop_front() {
+                let size = Self::data_noqueue(&mut self.write, channel, &buf, from);
+                pending_size += size;
+                if from + size < buf.len() {
+                    channel.pending_data.push_front((buf, a, from + size));
                     break;
                 }
             }
         }
         pending_size
+    }
+
+    pub fn flush_all_pending(&mut self) {
+        for (_, channel) in self.channels.iter_mut() {
+            while let Some((buf, a, from)) = channel.pending_data.pop_front() {
+                let size = Self::data_noqueue(&mut self.write, channel, &buf, from);
+                if from + size < buf.len() {
+                    channel.pending_data.push_front((buf, a, from + size));
+                    break;
+                }
+            }
+        }
     }
 
     pub fn has_pending_data(&self, channel: ChannelId) -> bool {
@@ -202,12 +213,15 @@ impl Encrypted {
         }
     }
 
+    /// Push the largest amount of `&buf0[from..]` that can fit into
+    /// the window, dividing it into packets if it is too large, and
+    /// return the length that was written.
     fn data_noqueue(
         write: &mut CryptoVec,
         channel: &mut Channel,
-        buf0: CryptoVec,
+        buf0: &[u8],
         from: usize,
-    ) -> (CryptoVec, usize) {
+    ) -> usize {
         let mut buf = if buf0.len() as u32 > from as u32 + channel.recipient_window_size {
             &buf0[from..from + channel.recipient_window_size as usize]
         } else {
@@ -232,17 +246,17 @@ impl Encrypted {
             buf = &buf[off..]
         }
         debug!("buf.len() = {:?}, buf_len = {:?}", buf.len(), buf_len);
-        (buf0, from + buf_len)
+        buf_len
     }
 
     pub fn data(&mut self, channel: ChannelId, buf0: CryptoVec) {
         if let Some(channel) = self.channels.get_mut(&channel) {
             assert!(channel.confirmed);
-            if !channel.pending_data.is_empty() {
+            if !channel.pending_data.is_empty() || self.rekey.is_some() {
                 channel.pending_data.push_back((buf0, None, 0));
                 return;
             }
-            let (buf0, buf_len) = Self::data_noqueue(&mut self.write, channel, buf0, 0);
+            let buf_len = Self::data_noqueue(&mut self.write, channel, &buf0, 0);
             if buf_len < buf0.len() {
                 channel.pending_data.push_back((buf0, None, buf_len))
             }
@@ -400,7 +414,7 @@ pub enum Kex {
 pub struct KexInit {
     pub algo: Option<negotiation::Names>,
     pub exchange: Exchange,
-    pub session_id: Option<hash::DigestBytes>,
+    pub session_id: Option<crate::Sha256Hash>,
     pub sent: bool,
 }
 
@@ -408,7 +422,7 @@ impl KexInit {
     pub fn received_rekey(
         ex: Exchange,
         algo: negotiation::Names,
-        session_id: &hash::DigestBytes,
+        session_id: &crate::Sha256Hash,
     ) -> Self {
         let mut kexinit = KexInit {
             exchange: ex,
@@ -423,7 +437,7 @@ impl KexInit {
         kexinit
     }
 
-    pub fn initiate_rekey(ex: Exchange, session_id: &hash::DigestBytes) -> Self {
+    pub fn initiate_rekey(ex: Exchange, session_id: &crate::Sha256Hash) -> Self {
         let mut kexinit = KexInit {
             exchange: ex,
             algo: None,
@@ -443,7 +457,7 @@ pub struct KexDh {
     pub exchange: Exchange,
     pub names: negotiation::Names,
     pub key: usize,
-    pub session_id: Option<hash::DigestBytes>,
+    pub session_id: Option<crate::Sha256Hash>,
 }
 
 #[derive(Debug)]
@@ -451,14 +465,14 @@ pub struct KexDhDone {
     pub exchange: Exchange,
     pub kex: kex::Algorithm,
     pub key: usize,
-    pub session_id: Option<hash::DigestBytes>,
+    pub session_id: Option<crate::Sha256Hash>,
     pub names: negotiation::Names,
 }
 
 impl KexDhDone {
     pub fn compute_keys(
         self,
-        hash: hash::DigestBytes,
+        hash: crate::Sha256Hash,
         is_server: bool,
     ) -> Result<NewKeys, crate::Error> {
         let session_id = if let Some(session_id) = self.session_id {
@@ -490,7 +504,7 @@ pub struct NewKeys {
     pub kex: kex::Algorithm,
     pub key: usize,
     pub cipher: cipher::CipherPair,
-    pub session_id: hash::DigestBytes,
+    pub session_id: crate::Sha256Hash,
     pub received: bool,
     pub sent: bool,
 }

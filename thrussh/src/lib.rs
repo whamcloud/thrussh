@@ -305,6 +305,9 @@ macro_rules! push_packet {
         x
     }};
 }
+
+type Sha256Hash = generic_array::GenericArray<u8, <sha2::Sha256 as digest::FixedOutputDirty>::OutputSize>;
+
 mod session;
 
 /// Server side of this library.
@@ -403,6 +406,9 @@ pub enum Error {
     #[error("Channel send error")]
     SendError,
 
+    #[error("Pending buffer limit reached")]
+    Pending,
+
     #[error(transparent)]
     Keys(#[from] thrussh_keys::Error),
 
@@ -422,6 +428,7 @@ pub enum Error {
     Join(#[from] tokio::task::JoinError),
 
     #[error(transparent)]
+    #[cfg(feature = "openssl")]
     Openssl(#[from] openssl::error::ErrorStack),
 
     #[error(transparent)]

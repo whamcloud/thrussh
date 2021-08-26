@@ -474,6 +474,8 @@ where
         common,
         receiver,
         sender: server::session::Handle { sender },
+        pending_reads: Vec::new(),
+        pending_len: 0,
     };
     session.flush()?;
     stream

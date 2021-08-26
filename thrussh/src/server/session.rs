@@ -10,6 +10,8 @@ pub struct Session {
     pub(crate) sender: Handle,
     pub(crate) receiver: Receiver<(ChannelId, ChannelMsg)>,
     pub(crate) target_window_size: u32,
+    pub(crate) pending_reads: Vec<CryptoVec>,
+    pub(crate) pending_len: u32,
 }
 
 #[derive(Clone)]

@@ -4,11 +4,11 @@
 //! opening key files, deciphering encrypted keys, and dealing with
 //! agents.
 //!
-//! The following example shows how to do all these in a single
-//! example: start and SSH agent server, connect to it with a client,
-//! decipher an encrypted private key (the password is `b"blabla"`),
-//! send it to the agent, and ask the agent to sign a piece of data
-//! (`b"Please sign this", below).
+//! The following example (which uses the `openssl` feature) shows how
+//! to do all these in a single example: start and SSH agent server,
+//! connect to it with a client, decipher an encrypted private key
+//! (the password is `b"blabla"`), send it to the agent, and ask the
+//! agent to sign a piece of data (`b"Please sign this", below).
 //!
 //!```
 //! use thrussh_keys::*;
@@ -17,8 +17,8 @@
 //! #[derive(Clone)]
 //! struct X{}
 //! impl agent::server::Agent for X {
-//!     fn confirm(&self, _: std::sync::Arc<key::KeyPair>) -> Box<dyn Future<Output = bool> + Send + Unpin> {
-//!         Box::new(futures::future::ready(true))
+//!     fn confirm(self, _: std::sync::Arc<key::KeyPair>) -> Box<dyn Future<Output = (Self, bool)> + Send + Unpin> {
+//!         Box::new(futures::future::ready((self, true)))
 //!     }
 //! }
 //!
@@ -35,9 +35,9 @@
 //!    core.spawn(async move {
 //!        let mut listener = tokio::net::UnixListener::bind(&agent_path_)
 //!            .unwrap();
-//!        thrussh_keys::agent::server::serve(listener.incoming(), X {}).await
+//!        thrussh_keys::agent::server::serve(tokio_stream::wrappers::UnixListenerStream::new(listener), X {}).await
 //!    });
-//!    let key = decode_secret_key(PKCS8_ENCRYPTED, Some(b"blabla")).unwrap();
+//!    let key = decode_secret_key(PKCS8_ENCRYPTED, Some("blabla")).unwrap();
 //!    let public = key.clone_public_key();
 //!    core.block_on(async move {
 //!        let stream = tokio::net::UnixStream::connect(&agent_path).await?;
@@ -45,15 +45,14 @@
 //!        client.add_identity(&key, &[agent::Constraint::KeyLifetime { seconds: 60 }]).await?;
 //!        client.request_identities().await?;
 //!        let buf = b"signed message";
-//!        let sig = client.sign_request(&public, buf).await?.unwrap();
-//!        assert!(public.verify_detached(buf, sig.as_ref()));
+//!        let sig = client.sign_request(&public, cryptovec::CryptoVec::from_slice(&buf[..])).await.1.unwrap();
+//!        // Here, `sig` is encoded in a format usable internally by the SSH protocol.
 //!        Ok::<(), Error>(())
 //!    }).unwrap()
 //! }
 //!```
 
 #![recursion_limit = "128"]
-extern crate thrussh_libsodium as sodium;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
@@ -75,8 +74,6 @@ pub mod encoding;
 pub mod key;
 pub mod signature;
 
-mod bcrypt_pbkdf;
-mod blowfish;
 mod format;
 pub use format::*;
 
@@ -116,14 +113,29 @@ pub enum Error {
     AgentFailure,
     #[error(transparent)]
     IO(#[from] std::io::Error),
+
+    #[cfg(feature = "openssl")]
     #[error(transparent)]
     Openssl(#[from] openssl::error::ErrorStack),
+
+    #[error(transparent)]
+    BlockMode(#[from] block_modes::BlockModeError),
+
     #[error("Base64 decoding error: {0}")]
     Decode(#[from] data_encoding::DecodeError),
     #[error("ASN1 decoding error: {0}")]
-    ASN1(#[from] yasna::ASN1Error),
-    #[error("Environment variable not found")]
+    ASN1(yasna::ASN1Error),
+    #[error("Environment variable `{0}` not found")]
     EnvVar(&'static str),
+    #[error("Unable to connect to ssh-agent. The environment variable `SSH_AUTH_SOCK` \
+    was set, but it points to a nonexistent file or directory.")]
+    BadAuthSock,
+}
+
+impl From<yasna::ASN1Error> for Error {
+    fn from(e: yasna::ASN1Error) -> Error {
+        Error::ASN1(e)
+    }
 }
 
 const KEYTYPE_ED25519: &'static [u8] = b"ssh-ed25519";
@@ -163,7 +175,10 @@ pub trait PublicKeyBase64 {
     /// Create the base64 part of the public key blob.
     fn public_key_bytes(&self) -> Vec<u8>;
     fn public_key_base64(&self) -> String {
-        BASE64_MIME.encode(&self.public_key_bytes())
+        let mut s = BASE64_MIME.encode(&self.public_key_bytes());
+        assert_eq!(s.pop(), Some('\n'));
+        assert_eq!(s.pop(), Some('\r'));
+        s
     }
 }
 
@@ -179,6 +194,7 @@ impl PublicKeyBase64 for key::PublicKey {
                     .unwrap();
                 s.extend_from_slice(&publickey.key);
             }
+            #[cfg(feature = "openssl")]
             key::PublicKey::RSA { ref key, .. } => {
                 use encoding::Encoding;
                 let name = b"ssh-rsa";
@@ -204,6 +220,7 @@ impl PublicKeyBase64 for key::KeyPair {
                 s.write_u32::<BigEndian>(32).unwrap();
                 s.extend_from_slice(&public);
             }
+            #[cfg(feature = "openssl")]
             key::KeyPair::RSA { ref key, .. } => {
                 use encoding::Encoding;
                 s.extend_ssh_mpint(&key.e().to_vec());
@@ -219,17 +236,15 @@ pub fn write_public_key_base64<W: Write>(
     mut w: W,
     publickey: &key::PublicKey,
 ) -> Result<(), Error> {
-    let name = publickey.name().as_bytes();
-    w.write_all(name)?;
-    w.write_all(b" ")?;
-    w.write_all(publickey.public_key_base64().as_bytes())?;
+    let pk = publickey.public_key_base64();
+    writeln!(w, "{} {}", publickey.name(), pk)?;
     Ok(())
 }
 
 /// Load a secret key, deciphering it with the supplied password if necessary.
 pub fn load_secret_key<P: AsRef<Path>>(
     secret_: P,
-    password: Option<&[u8]>,
+    password: Option<&str>,
 ) -> Result<key::KeyPair, Error> {
     let mut secret_file = std::fs::File::open(secret_)?;
     let mut secret = String::new();
@@ -271,7 +286,7 @@ pub fn learn_known_hosts_path<P: AsRef<Path>>(
     }
 
     // Write the key.
-    file.seek(SeekFrom::Start(0))?;
+    file.seek(SeekFrom::End(0))?;
     let mut file = std::io::BufWriter::new(file);
     if !ends_in_newline {
         file.write(b"\n")?;
@@ -305,6 +320,7 @@ pub fn check_known_hosts_path<P: AsRef<Path>>(
     } else {
         Cow::Owned(format!("[{}]:{}", host, port))
     };
+    debug!("host_port = {:?}", host_port);
     let mut line = 1;
     while f.read_line(&mut buffer).unwrap() > 0 {
         {
@@ -390,6 +406,7 @@ pub fn check_known_hosts(host: &str, port: u16, pubkey: &key::PublicKey) -> Resu
 mod test {
     extern crate tempdir;
     use super::*;
+    #[cfg(feature = "openssl")]
     use futures::Future;
     use std::fs::File;
     use std::io::Write;
@@ -403,6 +420,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
 7/wNsnDM0T7nLv/Q==
 -----END OPENSSH PRIVATE KEY-----";
 
+    #[cfg(feature = "openssl")]
     const RSA_KEY: &'static str = "-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
 NhAAAAAwEAAQAAAQEAuSvQ9m76zhRB4m0BUKPf17lwccj7KQ1Qtse63AOqP/VYItqEH8un
@@ -435,10 +453,11 @@ QR+u0AypRPmzHnOPAAAAEXJvb3RAMTQwOTExNTQ5NDBkAQ==
     fn test_decode_ed25519_secret_key() {
         extern crate env_logger;
         env_logger::try_init().unwrap_or(());
-        decode_secret_key(ED25519_KEY, Some(b"blabla")).unwrap();
+        decode_secret_key(ED25519_KEY, Some("blabla")).unwrap();
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_decode_rsa_secret_key() {
         extern crate env_logger;
         env_logger::try_init().unwrap_or(());
@@ -446,6 +465,7 @@ QR+u0AypRPmzHnOPAAAAEXJvb3RAMTQwOTExNTQ5NDBkAQ==
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_fingerprint() {
         let key = parse_public_key_base64(
             "AAAAC3NzaC1lZDI1NTE5AAAAILagOJFgwaMNhBWQINinKOXmqS4Gh5NgxgriXwdOoINJ",
@@ -496,6 +516,7 @@ QR+u0AypRPmzHnOPAAAAEXJvb3RAMTQwOTExNTQ5NDBkAQ==
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_srhb() {
         env_logger::try_init().unwrap_or(());
         let key = "AAAAB3NzaC1yc2EAAAADAQABAAACAQC0Xtz3tSNgbUQAXem4d+d6hMx7S8Nwm/DOO2AWyWCru+n/+jQ7wz2b5+3oG2+7GbWZNGj8HCc6wJSA3jUsgv1N6PImIWclD14qvoqY3Dea1J0CJgXnnM1xKzBz9C6pDHGvdtySg+yzEO41Xt4u7HFn4Zx5SGuI2NBsF5mtMLZXSi33jCIWVIkrJVd7sZaY8jiqeVZBB/UvkLPWewGVuSXZHT84pNw4+S0Rh6P6zdNutK+JbeuO+5Bav4h9iw4t2sdRkEiWg/AdMoSKmo97Gigq2mKdW12ivnXxz3VfxrCgYJj9WwaUUWSfnAju5SiNly0cTEAN4dJ7yB0mfLKope1kRhPsNaOuUmMUqlu/hBDM/luOCzNjyVJ+0LLB7SV5vOiV7xkVd4KbEGKou8eeCR3yjFazUe/D1pjYPssPL8cJhTSuMc+/UC9zD8yeEZhB9V+vW4NMUR+lh5+XeOzenl65lWYd/nBZXLBbpUMf1AOfbz65xluwCxr2D2lj46iApSIpvE63i3LzFkbGl9GdUiuZJLMFJzOWdhGGc97cB5OVyf8umZLqMHjaImxHEHrnPh1MOVpv87HYJtSBEsN4/omINCMZrk++CRYAIRKRpPKFWV7NQHcvw3m7XLR3KaTYe+0/MINIZwGdou9fLUU3zSd521vDjA/weasH0CyDHq7sZw==";
@@ -504,6 +525,7 @@ QR+u0AypRPmzHnOPAAAAEXJvb3RAMTQwOTExNTQ5NDBkAQ==
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_nikao() {
         env_logger::try_init().unwrap_or(());
         let key = "-----BEGIN RSA PRIVATE KEY-----
@@ -537,6 +559,7 @@ QaChXiDsryJZwsRnruvMRX9nedtqHrgnIsJLTXjppIhGhq5Kg4RQfOU=
         decode_secret_key(key, None).unwrap();
     }
 
+    #[cfg(feature = "openssl")]
     pub const PKCS8_RSA: &'static str = "-----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAKCAQEAwBGetHjW+3bDQpVktdemnk7JXgu1NBWUM+ysifYLDBvJ9ttX
 GNZSyQKA4v/dNr0FhAJ8I9BuOTjYCy1YfKylhl5D/DiSSXFPsQzERMmGgAlYvU2U
@@ -567,6 +590,7 @@ xV/JrzLAwPoKk3bkqys3bUmgo6DxVC/6RmMwPQ0rmpw78kOgEej90g==
 ";
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_loewenheim() {
         env_logger::try_init().unwrap_or(());
         let key = "-----BEGIN RSA PRIVATE KEY-----
@@ -600,7 +624,7 @@ raMODVc+NiJE0Qe6bwAi4HSpJ0qw2lKwVHYB8cdnNVv13acApod326/9itdbb3lt
 KJaj7gc0n6gmKY6r0/Ddufy1JZ6eihBCSJ64RARBXeg2rZpyT+xxhMEZLK5meOeR
 -----END RSA PRIVATE KEY-----
 ";
-        let key = decode_secret_key(key, Some(b"passphrase")).unwrap();
+        let key = decode_secret_key(key, Some("passphrase")).unwrap();
         let public = key.clone_public_key();
         let buf = b"blabla";
         let sig = key.sign_detached(buf).unwrap();
@@ -608,6 +632,7 @@ KJaj7gc0n6gmKY6r0/Ddufy1JZ6eihBCSJ64RARBXeg2rZpyT+xxhMEZLK5meOeR
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_o01eg() {
         env_logger::try_init().unwrap_or(());
 
@@ -642,15 +667,17 @@ iKUmK5recsXk5us5Ik7peIR/f9GAghpoJkF0HrHio47SfABuK30pzcj62uNWGljS
 br8gXU8KyiY9sZVbmplRPF+ar462zcI2kt0a18mr0vbrdqp2eMjb37QDbVBJ+rPE
 -----END RSA PRIVATE KEY-----
 ";
-        decode_secret_key(key, Some(b"12345")).unwrap();
+        decode_secret_key(key, Some("12345")).unwrap();
     }
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_pkcs8() {
         env_logger::try_init().unwrap_or(());
         println!("test");
-        decode_secret_key(PKCS8_RSA, Some(b"blabla")).unwrap();
+        decode_secret_key(PKCS8_RSA, Some("blabla")).unwrap();
     }
 
+    #[cfg(feature = "openssl")]
     const PKCS8_ENCRYPTED: &'static str = "-----BEGIN ENCRYPTED PRIVATE KEY-----
 MIIFLTBXBgkqhkiG9w0BBQ0wSjApBgkqhkiG9w0BBQwwHAQITo1O0b8YrS0CAggA
 MAwGCCqGSIb3DQIJBQAwHQYJYIZIAWUDBAEqBBBtLH4T1KOfo1GGr7salhR8BIIE
@@ -683,6 +710,7 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
 -----END ENCRYPTED PRIVATE KEY-----";
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_gpg() {
         env_logger::try_init().unwrap_or(());
         let algo = [115, 115, 104, 45, 114, 115, 97];
@@ -715,10 +743,11 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_pkcs8_encrypted() {
         env_logger::try_init().unwrap_or(());
         println!("test");
-        decode_secret_key(PKCS8_ENCRYPTED, Some(b"blabla")).unwrap();
+        decode_secret_key(PKCS8_ENCRYPTED, Some("blabla")).unwrap();
     }
 
     fn test_client_agent(key: key::KeyPair) {
@@ -735,7 +764,7 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
             .spawn()
             .expect("failed to execute process");
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let public = key.clone_public_key();
             let stream = tokio::net::UnixStream::connect(&agent_path).await?;
@@ -747,7 +776,13 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
             let (_, buf) = client.sign_request(&public, buf).await;
             let buf = buf?;
             let (a, b) = buf.split_at(len);
-            assert!(public.verify_detached(a, b));
+            match key {
+                key::KeyPair::Ed25519 { .. } => {
+                    let sig = &b[b.len() - 64..];
+                    assert!(public.verify_detached(a, sig));
+                }
+                _ => {}
+            }
             Ok::<(), Error>(())
         })
         .unwrap();
@@ -757,29 +792,32 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
 
     #[test]
     fn test_client_agent_ed25519() {
-        let key = decode_secret_key(ED25519_KEY, Some(b"blabla")).unwrap();
+        let key = decode_secret_key(ED25519_KEY, Some("blabla")).unwrap();
         test_client_agent(key)
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_client_agent_rsa() {
-        let key = decode_secret_key(PKCS8_ENCRYPTED, Some(b"blabla")).unwrap();
+        let key = decode_secret_key(PKCS8_ENCRYPTED, Some("blabla")).unwrap();
         test_client_agent(key)
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_client_agent_openssh_rsa() {
         let key = decode_secret_key(RSA_KEY, None).unwrap();
         test_client_agent(key)
     }
 
     #[test]
+    #[cfg(feature = "openssl")]
     fn test_agent() {
         env_logger::try_init().unwrap_or(());
         let dir = tempdir::TempDir::new("thrussh").unwrap();
         let agent_path = dir.path().join("agent");
 
-        let mut core = tokio::runtime::Runtime::new().unwrap();
+        let core = tokio::runtime::Runtime::new().unwrap();
         use agent;
 
         #[derive(Clone)]
@@ -804,7 +842,7 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
             )
             .await
         });
-        let key = decode_secret_key(PKCS8_ENCRYPTED, Some(b"blabla")).unwrap();
+        let key = decode_secret_key(PKCS8_ENCRYPTED, Some("blabla")).unwrap();
         let public = key.clone_public_key();
         core.block_on(async move {
             let stream = tokio::net::UnixStream::connect(&agent_path).await?;
@@ -818,7 +856,13 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
             let (_, buf) = client.sign_request(&public, buf).await;
             let buf = buf?;
             let (a, b) = buf.split_at(len);
-            assert!(public.verify_detached(a, b));
+            match key {
+                key::KeyPair::Ed25519 { .. } => {
+                    let sig = &b[b.len() - 64..];
+                    assert!(public.verify_detached(a, sig));
+                }
+                _ => {}
+            }
             Ok::<(), Error>(())
         })
         .unwrap()

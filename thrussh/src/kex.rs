@@ -17,10 +17,10 @@ use byteorder::{BigEndian, ByteOrder};
 
 use crate::session::Exchange;
 use cryptovec::CryptoVec;
-use openssl;
 use sodium;
 use std::cell::RefCell;
 use thrussh_keys::encoding::Encoding;
+use rand::RngCore;
 
 #[doc(hidden)]
 pub struct Algorithm {
@@ -73,10 +73,9 @@ impl Algorithm {
                 .clone_from_slice(&payload[5..(5 + pubkey_len)])
         };
         debug!("client_pubkey: {:?}", client_pubkey);
-        use openssl::rand::*;
         use sodium::scalarmult::*;
         let mut server_secret = Scalar([0; 32]);
-        rand_bytes(&mut server_secret.0)?;
+        rand::thread_rng().fill_bytes(&mut server_secret.0);
         let server_pubkey = scalarmult_base(&server_secret);
 
         // fill exchange.
@@ -95,10 +94,9 @@ impl Algorithm {
         client_ephemeral: &mut CryptoVec,
         buf: &mut CryptoVec,
     ) -> Result<Algorithm, crate::Error> {
-        use openssl::rand::*;
         use sodium::scalarmult::*;
         let mut client_secret = Scalar([0; 32]);
-        rand_bytes(&mut client_secret.0)?;
+        rand::thread_rng().fill_bytes(&mut client_secret.0);
         let client_pubkey = scalarmult_base(&client_secret);
 
         // fill exchange.
@@ -130,7 +128,7 @@ impl Algorithm {
         key: &K,
         exchange: &Exchange,
         buffer: &mut CryptoVec,
-    ) -> Result<openssl::hash::DigestBytes, crate::Error> {
+    ) -> Result<crate::Sha256Hash, crate::Error> {
         // Computing the exchange hash, see page 7 of RFC 5656.
         buffer.clear();
         buffer.extend_ssh_string(&exchange.client_id);
@@ -145,19 +143,17 @@ impl Algorithm {
         if let Some(ref shared) = self.shared_secret {
             buffer.extend_ssh_mpint(&shared.0);
         }
-        use openssl::hash::*;
-        let hash = {
-            let mut hasher = Hasher::new(MessageDigest::sha256())?;
-            hasher.update(&buffer)?;
-            hasher.finish()?
-        };
-        Ok(hash)
+
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&buffer);
+        Ok(hasher.finalize())
     }
 
     pub fn compute_keys(
         &self,
-        session_id: &openssl::hash::DigestBytes,
-        exchange_hash: &openssl::hash::DigestBytes,
+        session_id: &crate::Sha256Hash,
+        exchange_hash: &crate::Sha256Hash,
         cipher: cipher::Name,
         is_server: bool,
     ) -> Result<super::cipher::CipherPair, crate::Error> {
@@ -181,11 +177,11 @@ impl Algorithm {
                     buffer.extend(exchange_hash.as_ref());
                     buffer.push(c);
                     buffer.extend(session_id.as_ref());
-                    use openssl::hash::*;
-                    let hash = {
-                        let mut hasher = Hasher::new(MessageDigest::sha256())?;
-                        hasher.update(&buffer)?;
-                        hasher.finish()?
+                    let hash =                    {
+                        use sha2::Digest;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(&buffer[..]);
+                        hasher.finalize()
                     };
                     key.extend(hash.as_ref());
 
@@ -198,9 +194,10 @@ impl Algorithm {
                         buffer.extend(exchange_hash.as_ref());
                         buffer.extend(key);
                         let hash = {
-                            let mut hasher = Hasher::new(MessageDigest::sha256())?;
-                            hasher.update(&buffer)?;
-                            hasher.finish()?
+                            use sha2::Digest;
+                            let mut hasher = sha2::Sha256::new();
+                            hasher.update(&buffer[..]);
+                            hasher.finalize()
                         };
                         key.extend(&hash.as_ref());
                     }

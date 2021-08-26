@@ -1,7 +1,7 @@
 [package]
 name = "thrussh-config"
 description = "Utilities to parse .ssh/config files, including helpers to implement ProxyCommand in Thrussh."
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Pierre-Étienne Meunier <pe@pijul.org>"]
 include = [ "Cargo.toml", "src/lib.rs", "src/proxy.rs" ]
 license = "Apache-2.0"
