@@ -104,6 +104,9 @@ enum Msg {
         address: String,
         port: u32,
     },
+    Close {
+        id: ChannelId,
+    },
     Disconnect {
         reason: Disconnect,
         description: String,
@@ -719,6 +722,15 @@ impl Channel {
         Ok(())
     }
 
+    pub async fn close(&mut self) -> Result<(), Error> {
+        self.sender
+            .sender
+            .send(Msg::Close { id: self.sender.id })
+            .await
+            .map_err(|_| Error::SendError)?;
+        Ok(())
+    }
+
     /// Wait for data to come.
     pub async fn wait(&mut self) -> Option<ChannelMsg> {
         loop {
@@ -913,6 +925,7 @@ impl Session {
                         Some(Msg::CancelTcpIpForward { want_reply, address, port }) => {
                             self.cancel_tcpip_forward(want_reply, &address, port)
                         },
+                        Some(Msg::Close { id }) => { self.close(id); },
                         Some(Msg::Disconnect { reason, description, language_tag }) => {
                             self.disconnect(reason, &description, &language_tag)
                         },
