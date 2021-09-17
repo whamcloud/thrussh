@@ -22,7 +22,7 @@ use crate::sshbuffer::*;
 use crate::{ChannelId, ChannelMsg, ChannelOpenFailure, Disconnect, Limits, Sig};
 use cryptovec::CryptoVec;
 use futures::task::{Context, Poll};
-use futures::Future;
+use futures::{Future, FutureExt};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -213,7 +213,6 @@ pub struct Channel {
 }
 
 impl<H: Handler> Handle<H> {
-
     pub fn is_closed(&self) -> bool {
         self.sender.is_closed()
     }
@@ -489,7 +488,7 @@ impl Channel {
     }
 
     /// Signal a remote process.
-    pub async fn signal(&mut self, signal: Sig) -> Result<(), Error> {
+    pub async fn signal(&self, signal: Sig) -> Result<(), Error> {
         self.sender
             .sender
             .send(Msg::Signal {
@@ -499,6 +498,27 @@ impl Channel {
             .await
             .map_err(|_| Error::SendError)?;
         Ok(())
+    }
+
+    /// Get a `FnOnce` that can be used to send a signal through this channel
+    pub fn get_signal_sender(
+        &self,
+    ) -> impl FnOnce(Sig) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> {
+        let sender = self.sender.clone();
+        let id = self.sender.id;
+
+        move |signal| {
+            async move {
+                sender
+                    .sender
+                    .send(Msg::Signal { id, signal })
+                    .await
+                    .map_err(|_| Error::SendError)?;
+
+                Ok(())
+            }
+            .boxed()
+        }
     }
 
     /// Request the start of a subsystem with the given name.
