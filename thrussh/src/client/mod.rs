@@ -1395,6 +1395,16 @@ pub trait Handler: Sized {
         self.finished(session)
     }
 
+    /// Called when the server sends a flush request.
+    #[allow(unused_variables)]
+    fn flush(self, channel: ChannelId, session: Session) -> Self::FutureUnit {
+        if let Some(chan) = session.channels.get(&channel) {
+            chan.send(OpenChannelMsg::Msg(ChannelMsg::Flush))
+            .unwrap_or(())
+        }
+        self.finished(session)
+    }
+
     /// The server informs this client of whether the client may
     /// perform control-S/control-Q flow control. See
     /// [RFC4254](https://tools.ietf.org/html/rfc4254#section-6.8).

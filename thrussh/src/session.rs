@@ -36,6 +36,7 @@ pub(crate) struct Encrypted {
     pub rekey: Option<Kex>,
     pub channels: HashMap<ChannelId, Channel>,
     pub last_channel_id: Wrapping<u32>,
+    #[allow(dead_code)]
     pub wants_reply: bool,
     pub write: CryptoVec,
     pub write_cursor: usize,
