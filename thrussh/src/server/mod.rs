@@ -544,6 +544,8 @@ where
                     }
                     Some((id, ChannelMsg::Flush)) => {
                         session.flush_pending(id);
+                        session.flush()
+                            .map_err(crate::Error::from)?;
                     }
                     Some((id, ChannelMsg::Eof)) => {
                         session.eof(id);
