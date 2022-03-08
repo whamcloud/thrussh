@@ -693,8 +693,15 @@ impl Channel {
                 "sending data, self.window_size = {:?}, self.max_packet_size = {:?}, total = {:?}",
                 self.window_size, self.max_packet_size, total
             );
+
             let sendable = self.window_size.min(self.max_packet_size) as usize;
-            debug!("sendable {:?}", sendable);
+
+            // If we can not send anymore, continue
+            // and wait for server window adjustment
+            if sendable == 0 {
+                continue;
+            }
+
             let mut c = CryptoVec::new_zeroed(sendable);
             let n = data.read(&mut c[..]).await?;
             total += n;
