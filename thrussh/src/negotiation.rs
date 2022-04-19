@@ -18,9 +18,9 @@ use thrussh_keys::key;
 // use super::mac; // unimplemented
 use crate::compression::*;
 use cryptovec::CryptoVec;
+use rand::RngCore;
 use thrussh_keys::encoding::{Encoding, Reader};
 use thrussh_keys::key::{KeyPair, PublicKey};
-use rand::RngCore;
 
 #[derive(Debug)]
 pub struct Names {
@@ -53,7 +53,7 @@ impl Preferred {
     pub const DEFAULT: Preferred = Preferred {
         kex: &[kex::CURVE25519],
         key: &[key::ED25519, key::RSA_SHA2_256, key::RSA_SHA2_512],
-        cipher: &[cipher::chacha20poly1305::NAME],
+        cipher: &[cipher::chacha20poly1305::NAME, cipher::aes256gcm::NAME],
         mac: &["none"],
         compression: &["none", "zlib", "zlib@openssh.com"],
     };
@@ -62,7 +62,7 @@ impl Preferred {
     pub const DEFAULT: Preferred = Preferred {
         kex: &[kex::CURVE25519],
         key: &[key::ED25519],
-        cipher: &[cipher::chacha20poly1305::NAME],
+        cipher: &[cipher::chacha20poly1305::NAME, cipher::aes256gcm::NAME],
         mac: &["none"],
         compression: &["none", "zlib", "zlib@openssh.com"],
     };
@@ -70,7 +70,7 @@ impl Preferred {
     pub const COMPRESSED: Preferred = Preferred {
         kex: &[kex::CURVE25519],
         key: &[key::ED25519, key::RSA_SHA2_256, key::RSA_SHA2_512],
-        cipher: &[cipher::chacha20poly1305::NAME],
+        cipher: &[cipher::chacha20poly1305::NAME, cipher::aes256gcm::NAME],
         mac: &["none"],
         compression: &["zlib", "zlib@openssh.com", "none"],
     };
@@ -94,10 +94,10 @@ impl Named for () {
     }
 }
 
+#[cfg(not(feature = "openssl"))]
+use thrussh_keys::key::ED25519;
 #[cfg(feature = "openssl")]
 use thrussh_keys::key::{ED25519, SSH_RSA};
-#[cfg(not(feature = "openssl"))]
-use thrussh_keys::key::{ED25519};
 
 impl Named for PublicKey {
     fn name(&self) -> &'static str {

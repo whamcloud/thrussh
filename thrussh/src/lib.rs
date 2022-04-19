@@ -306,7 +306,8 @@ macro_rules! push_packet {
     }};
 }
 
-type Sha256Hash = generic_array::GenericArray<u8, <sha2::Sha256 as digest::FixedOutputDirty>::OutputSize>;
+type Sha256Hash =
+    generic_array::GenericArray<u8, <sha2::Sha256 as digest::FixedOutputDirty>::OutputSize>;
 
 mod session;
 
@@ -408,6 +409,9 @@ pub enum Error {
 
     #[error("Pending buffer limit reached")]
     Pending,
+
+    #[error("Failed to decrypt a packet")]
+    DecryptionError,
 
     #[error(transparent)]
     Keys(#[from] thrussh_keys::Error),
