@@ -114,7 +114,7 @@ impl super::Session {
                     enc.rekey = Some(Kex::KexInit(k));
                     self.pending_len += buf.len() as u32;
                     if self.pending_len > 2 * self.target_window_size {
-                        return Err(Error::Pending.into())
+                        return Err(Error::Pending.into());
                     }
                     self.pending_reads.push(CryptoVec::from_slice(buf));
                     return Ok(self);
@@ -500,10 +500,9 @@ impl super::Session {
                     self.common.wants_reply = false;
                     push_packet!(enc.write, enc.write.push(msg::REQUEST_FAILURE))
                 }
-                info!(
-                    "Unhandled global request: {:?} {:?}",
+                debug!(
+                    "Unhandled global request: {:?} {wants_reply:?}",
                     std::str::from_utf8(req),
-                    wants_reply
                 );
                 Ok(self)
             }
