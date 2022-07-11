@@ -542,6 +542,11 @@ where
                     Some((id, ChannelMsg::ExtendedData { ext, data })) => {
                         session.extended_data(id, ext, data);
                     }
+                    Some((id, ChannelMsg::Flush)) => {
+                        session.flush_pending(id);
+                        session.flush()
+                            .map_err(crate::Error::from)?;
+                    }
                     Some((id, ChannelMsg::Eof)) => {
                         session.eof(id);
                     }

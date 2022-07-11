@@ -400,7 +400,7 @@ impl CryptoVec {
     /// Create a `CryptoVec` from a slice
     ///
     /// ```
-    /// CryptoVec::from_slice(b"test");
+    /// cryptovec::CryptoVec::from_slice(b"test");
     /// ```
     pub fn from_slice(s: &[u8]) -> CryptoVec {
         let mut v = CryptoVec::new();

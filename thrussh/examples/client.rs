@@ -61,6 +61,9 @@ async fn main() {
             thrussh::ChannelMsg::Data { ref data } => {
                 f.write_all(&data).unwrap();
             }
+            thrussh::ChannelMsg::Flush => {
+                f.flush().unwrap();
+            }
             thrussh::ChannelMsg::Eof => {
                 f.flush().unwrap();
                 break;

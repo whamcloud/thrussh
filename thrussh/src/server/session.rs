@@ -48,6 +48,16 @@ impl Handle {
                 _ => unreachable!(),
             })
     }
+    /// Flushes a particular channel on the session.
+    pub async fn flush(&mut self, id: ChannelId) -> Result<(), ()> {
+        self.sender
+            .send((id, ChannelMsg::Flush))
+            .await
+            .map_err(|e| match e.0 {
+                (_, ChannelMsg::Flush) => (),
+                _ => unreachable!(),
+            })
+    }
 
     /// Send EOF to the session referenced by this handler.
     pub async fn eof(&mut self, id: ChannelId) -> Result<(), ()> {

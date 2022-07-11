@@ -781,6 +781,7 @@ Cog3JMeTrb3LiPHgN6gU2P30MRp6L1j1J/MtlOAr5rux
                     let sig = &b[b.len() - 64..];
                     assert!(public.verify_detached(a, sig));
                 }
+                #[allow(unreachable_patterns)]
                 _ => {}
             }
             Ok::<(), Error>(())

@@ -39,14 +39,18 @@ pub struct Session {
 
 impl Session {
     async fn connect(
+        #[allow(unused_variables)]
         pem: &[u8],
         user: impl Into<String>,
         addr: impl std::net::ToSocketAddrs,
     ) -> Result<Self> {
+        #[cfg(feature="openssl")]
         let key_pair = key::KeyPair::RSA {
             key: openssl::rsa::Rsa::private_key_from_pem(pem)?,
             hash: key::SignatureHash::SHA2_512,
         };
+        #[cfg(not(feature="openssl"))]
+        let key_pair = key::KeyPair::generate_ed25519().unwrap();
         let config = client::Config::default();
         let config = Arc::new(config);
         let sh = Client {};
@@ -69,6 +73,9 @@ impl Session {
             match msg {
                 thrussh::ChannelMsg::Data { ref data } => {
                     output.write_all(&data).unwrap();
+                }
+                thrussh::ChannelMsg::Flush => {
+                    output.flush().unwrap();
                 }
                 thrussh::ChannelMsg::ExitStatus { exit_status } => {
                     code = Some(exit_status);

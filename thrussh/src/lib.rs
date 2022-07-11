@@ -632,6 +632,7 @@ pub enum ChannelMsg {
         ext: u32,
     },
     Eof,
+    Flush,
     Close,
     XonXoff {
         client_can_do: bool,
@@ -713,6 +714,7 @@ mod test_compress {
 
     #[derive(Clone)]
     struct Server {
+        #[allow(unused)]
         client_pubkey: Arc<thrussh_keys::key::PublicKey>,
         clients: Arc<Mutex<HashMap<(usize, ChannelId), super::server::Handle>>>,
         id: usize,
