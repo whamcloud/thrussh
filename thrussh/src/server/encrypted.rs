@@ -27,7 +27,7 @@ use tokio::time::Instant;
 
 impl Session {
     /// Returns false iff a request was rejected.
-    pub(in crate) async fn server_read_encrypted<H: Handler>(
+    pub(crate) async fn server_read_encrypted<H: Handler>(
         mut self,
         handler: &mut Option<H>,
         buf: &[u8],
@@ -57,7 +57,7 @@ impl Session {
                 );
                 enc.rekey = Some(kexinit.server_parse(
                     self.common.config.as_ref(),
-                    &mut self.common.cipher,
+                    &self.common.cipher,
                     buf,
                     &mut self.common.write_buffer,
                 )?);
@@ -86,7 +86,7 @@ impl Session {
 
                 // Ok, NEWKEYS received, now encrypted.
                 enc.flush_all_pending();
-                let mut pending = std::mem::replace(&mut self.pending_reads, Vec::new());
+                let mut pending = std::mem::take(&mut self.pending_reads);
                 for p in pending.drain(..) {
                     self = self.process_packet(handler, &p).await?
                 }
@@ -100,7 +100,7 @@ impl Session {
                 enc.rekey = Some(Kex::KexInit(k));
                 self.pending_len += buf.len() as u32;
                 if self.pending_len > 2 * self.target_window_size {
-                    return Err(Error::Pending.into())
+                    return Err(Error::Pending.into());
                 }
                 self.pending_reads.push(CryptoVec::from_slice(buf));
                 return Ok(self);
@@ -108,7 +108,7 @@ impl Session {
             rek => {
                 debug!("rek = {:?}", rek);
                 enc.rekey = rek
-            },
+            }
         }
         self.process_packet(handler, buf).await
     }
@@ -187,7 +187,7 @@ fn server_accept_service(
         buffer.extend_ssh_string(b"ssh-userauth");
     });
 
-    if let Some(ref banner) = banner {
+    if let Some(banner) = banner {
         push_packet!(buffer, {
             buffer.push(msg::USERAUTH_BANNER);
             buffer.extend_ssh_string(banner.as_bytes());
@@ -196,7 +196,7 @@ fn server_accept_service(
     }
 
     AuthRequest {
-        methods: methods,
+        methods,
         partial_success: false, // not used immediately anway.
         current: None,
         rejection_count: 0,
@@ -246,7 +246,7 @@ impl Encrypted {
                     self.state = EncryptedState::InitCompression;
                 } else {
                     auth_user.clear();
-                    auth_request.methods = auth_request.methods - MethodSet::PASSWORD;
+                    auth_request.methods -= MethodSet::PASSWORD;
                     auth_request.partial_success = false;
                     reject_auth_request(until, &mut self.write, auth_request).await;
                 }
@@ -343,7 +343,7 @@ impl Encrypted {
 
                     let is_valid = if sent_pk_ok && user == auth_user {
                         true
-                    } else if auth_user.len() == 0 {
+                    } else if auth_user.is_empty() {
                         auth_user.clear();
                         auth_user.push_str(user);
                         let h = handler.take().unwrap();
@@ -386,11 +386,11 @@ impl Encrypted {
 
                         let mut algo = CryptoVec::new();
                         algo.extend(pubkey_algo);
-                        debug!("pubkey_key: {:?}", pubkey_key);
+                        debug!("pubkey_key: {pubkey_key:?}");
                         push_packet!(self.write, {
                             self.write.push(msg::USERAUTH_PK_OK);
-                            self.write.extend_ssh_string(&pubkey_algo);
-                            self.write.extend_ssh_string(&pubkey_key);
+                            self.write.extend_ssh_string(pubkey_algo);
+                            self.write.extend_ssh_string(pubkey_key);
                         });
 
                         auth_request.current = Some(CurrentRequest::PublicKey {
@@ -428,7 +428,7 @@ async fn reject_auth_request(
     push_packet!(write, {
         write.push(msg::USERAUTH_FAILURE);
         write.extend_list(auth_request.methods);
-        write.push(if auth_request.partial_success { 1 } else { 0 });
+        write.push(u8::from(auth_request.partial_success));
     });
     auth_request.current = None;
     auth_request.rejection_count += 1;
@@ -447,13 +447,13 @@ async fn read_userauth_info_response<H: Handler>(
     handler: &mut Option<H>,
     write: &mut CryptoVec,
     auth_request: &mut AuthRequest,
-    user: &mut String,
+    user: &mut str,
     b: &[u8],
 ) -> Result<bool, H::Error> {
     if let Some(CurrentRequest::KeyboardInteractive { ref submethods }) = auth_request.current {
         let mut r = b.reader(1);
         let n = r.read_u32().map_err(crate::Error::from)?;
-        let response = Response { pos: r, n: n };
+        let response = Response { pos: r, n };
         let h = handler.take().unwrap();
         let (h, auth) = h
             .auth_keyboard_interactive(user, submethods, Some(response))
@@ -461,7 +461,7 @@ async fn read_userauth_info_response<H: Handler>(
         *handler = Some(h);
         reply_userauth_info_response(until, auth_request, write, auth)
             .await
-            .map_err(|e| H::Error::from(crate::Error::from(e)))
+            .map_err(H::Error::from)
     } else {
         reject_auth_request(until, write, auth_request).await;
         Ok(false)
@@ -497,7 +497,7 @@ async fn reply_userauth_info_response(
                 write.push_u32_be(prompts.len() as u32);
                 for &(ref a, b) in prompts.iter() {
                     write.extend_ssh_string(a.as_bytes());
-                    write.push(if b { 1 } else { 0 });
+                    write.push(u8::from(b));
                 }
             });
             Ok(false)
@@ -563,9 +563,9 @@ impl Session {
                 }
                 self.flush()?;
                 let (h, s) = if let Some(ext) = ext {
-                    h.extended_data(channel_num, ext, &data, self).await?
+                    h.extended_data(channel_num, ext, data, self).await?
                 } else {
-                    h.data(channel_num, &data, self).await?
+                    h.data(channel_num, data, self).await?
                 };
                 *handler = Some(h);
                 Ok(s)
@@ -827,10 +827,8 @@ impl Session {
         };
         let channel = Channel {
             recipient_channel: sender,
-
             // "sender" is the local end, i.e. we're the sender, the remote is the recipient.
-            sender_channel: sender_channel,
-
+            sender_channel,
             recipient_window_size: window,
             sender_window_size: self.common.config.window_size,
             recipient_maximum_packet_size: maxpacket,

@@ -617,7 +617,7 @@ pub(crate) struct Channel {
     recipient_maximum_packet_size: u32,
     sender_maximum_packet_size: u32,
     /// Has the other side confirmed the channel?
-    pub confirmed: bool,
+    pub(crate) confirmed: bool,
     wants_reply: bool,
     pending_data: std::collections::VecDeque<(CryptoVec, Option<u32>, usize)>,
 }
@@ -691,7 +691,6 @@ mod test_compress {
         config.preferred = Preferred::COMPRESSED;
         let config = Arc::new(config);
 
-        dbg!(&addr);
         let mut session = client::connect(config, addr, Client {}).await.unwrap();
         let authenticated = session
             .authenticate_publickey(std::env::var("USER").unwrap(), Arc::new(client_key))

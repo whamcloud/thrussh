@@ -48,8 +48,10 @@ impl AgentClient<tokio::net::UnixStream> {
             return Err(Error::EnvVar("SSH_AUTH_SOCK"));
         };
         match Self::connect_uds(var).await {
-            Err(Error::IO(io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => Err(Error::BadAuthSock),
-            owise => owise
+            Err(Error::IO(io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                Err(Error::BadAuthSock)
+            }
+            owise => owise,
         }
     }
 }
@@ -293,7 +295,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
                 }
                 (self, Ok(data))
             } else if self.buf[0] == msg::FAILURE {
-                (self, Err(Error::AgentFailure.into()))
+                (self, Err(Error::AgentFailure))
             } else {
                 debug!("self.buf = {:?}", &self.buf[..]);
                 (self, Ok(data))
@@ -305,7 +307,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
         self.buf.clear();
         self.buf.resize(4);
         self.buf.push(msg::SIGN_REQUEST);
-        key_blob(&public, &mut self.buf);
+        key_blob(public, &mut self.buf);
         self.buf.extend_ssh_string(data);
         debug!("public = {:?}", public);
         let hash = match public {
@@ -343,7 +345,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
         data: &[u8],
     ) -> impl futures::Future<Output = (Self, Result<String, Error>)> {
         debug!("sign_request: {:?}", data);
-        self.prepare_sign_request(public, &data);
+        self.prepare_sign_request(public, data);
         async move {
             let resp = self.read_response().await;
             if let Err(e) = resp {
@@ -395,16 +397,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AgentClient<S> {
                                 sig_bytes,
                             )))
                         }
-                        _ => Err((Error::UnknownSignatureType {
+                        _ => Err(Error::UnknownSignatureType {
                             sig_type: std::str::from_utf8(typ).unwrap_or("").to_string(),
-                        })
-                        .into()),
+                        }),
                     }
                 };
                 let sig = as_sig(&self.buf);
                 (self, sig)
             } else {
-                (self, Err(Error::AgentProtocolError.into()))
+                (self, Err(Error::AgentProtocolError))
             }
         }
     }

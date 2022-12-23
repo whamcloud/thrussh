@@ -81,7 +81,7 @@ impl Encoding for Vec<u8> {
 
     fn extend_list<A: Bytes, I: Iterator<Item = A>>(&mut self, list: I) {
         let len0 = self.len();
-        self.extend(&[0, 0, 0, 0]);
+        self.extend([0, 0, 0, 0]);
         let mut first = true;
         for i in list {
             if !first {
@@ -97,7 +97,7 @@ impl Encoding for Vec<u8> {
     }
 
     fn write_empty_list(&mut self) {
-        self.extend(&[0, 0, 0, 0]);
+        self.extend([0, 0, 0, 0]);
     }
 }
 
@@ -159,7 +159,7 @@ pub trait Reader {
 impl Reader for CryptoVec {
     fn reader<'a>(&'a self, starting_at: usize) -> Position<'a> {
         Position {
-            s: &self,
+            s: self,
             position: starting_at,
         }
     }
@@ -205,7 +205,7 @@ impl<'a> Position<'a> {
     }
     /// Read one byte from this reader.
     pub fn read_byte(&mut self) -> Result<u8, Error> {
-        if self.position + 1 <= self.s.len() {
+        if self.position < self.s.len() {
             let u = self.s[self.position];
             self.position += 1;
             Ok(u)

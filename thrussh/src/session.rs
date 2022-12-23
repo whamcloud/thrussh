@@ -140,23 +140,28 @@ impl Encrypted {
     }
     */
 
-    pub fn eof(&mut self, channel: ChannelId) {
+    pub(crate) fn eof(&mut self, channel: ChannelId) {
         self.byte(channel, msg::CHANNEL_EOF);
     }
 
-    pub fn close(&mut self, channel: ChannelId) {
+    pub(crate) fn close(&mut self, channel: ChannelId) {
         self.byte(channel, msg::CHANNEL_CLOSE);
     }
 
-    pub fn sender_window_size(&self, channel: ChannelId) -> usize {
-        if let Some(ref channel) = self.channels.get(&channel) {
+    pub(crate) fn sender_window_size(&self, channel: ChannelId) -> usize {
+        if let Some(channel) = self.channels.get(&channel) {
             channel.sender_window_size as usize
         } else {
             0
         }
     }
 
-    pub fn adjust_window_size(&mut self, channel: ChannelId, data: &[u8], target: u32) -> bool {
+    pub(crate) fn adjust_window_size(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        target: u32,
+    ) -> bool {
         debug!("adjust_window_size");
         if let Some(ref mut channel) = self.channels.get_mut(&channel) {
             debug!("channel {:?}", channel);
@@ -182,22 +187,26 @@ impl Encrypted {
         false
     }
 
-    pub fn flush_pending(&mut self, channel: ChannelId) -> usize {
+    pub(crate) fn flush_pending(&mut self, channel: ChannelId) -> usize {
         let mut pending_size = 0;
+
         if let Some(channel) = self.channels.get_mut(&channel) {
             while let Some((buf, a, from)) = channel.pending_data.pop_front() {
                 let size = Self::data_noqueue(&mut self.write, channel, &buf, from);
+
                 pending_size += size;
+
                 if from + size < buf.len() {
                     channel.pending_data.push_front((buf, a, from + size));
                     break;
                 }
             }
         }
+
         pending_size
     }
 
-    pub fn flush_all_pending(&mut self) {
+    pub(crate) fn flush_all_pending(&mut self) {
         for (_, channel) in self.channels.iter_mut() {
             while let Some((buf, a, from)) = channel.pending_data.pop_front() {
                 let size = Self::data_noqueue(&mut self.write, channel, &buf, from);
@@ -209,7 +218,7 @@ impl Encrypted {
         }
     }
 
-    pub fn has_pending_data(&self, channel: ChannelId) -> bool {
+    pub(crate) fn has_pending_data(&self, channel: ChannelId) -> bool {
         if let Some(channel) = self.channels.get(&channel) {
             !channel.pending_data.is_empty()
         } else {
@@ -226,14 +235,19 @@ impl Encrypted {
         buf0: &[u8],
         from: usize,
     ) -> usize {
+        if from >= buf0.len() {
+            return 0;
+        }
+
         let mut buf = if buf0.len() as u32 > from as u32 + channel.recipient_window_size {
             &buf0[from..from + channel.recipient_window_size as usize]
         } else {
             &buf0[from..]
         };
+
         let buf_len = buf.len();
 
-        while buf.len() > 0 {
+        while !buf.is_empty() {
             // Compute the length we're allowed to send.
             let off = std::cmp::min(buf.len(), channel.recipient_maximum_packet_size as usize);
             push_packet!(write, {
@@ -246,63 +260,76 @@ impl Encrypted {
                 write.len(),
                 channel.recipient_window_size
             );
+
             channel.recipient_window_size -= off as u32;
             buf = &buf[off..]
         }
-        debug!("buf.len() = {:?}, buf_len = {:?}", buf.len(), buf_len);
+        debug!("buf.len() = {:?}, buf_len = {buf_len:?}", buf.len());
         buf_len
     }
 
-    pub fn data(&mut self, channel: ChannelId, buf0: CryptoVec) {
+    pub(crate) fn data(&mut self, channel: ChannelId, buf0: CryptoVec) {
         if let Some(channel) = self.channels.get_mut(&channel) {
             assert!(channel.confirmed);
+
             if !channel.pending_data.is_empty() || self.rekey.is_some() {
                 channel.pending_data.push_back((buf0, None, 0));
                 return;
             }
+
             let buf_len = Self::data_noqueue(&mut self.write, channel, &buf0, 0);
+
             if buf_len < buf0.len() {
                 channel.pending_data.push_back((buf0, None, buf_len))
             }
         }
     }
 
-    pub fn extended_data(&mut self, channel: ChannelId, ext: u32, buf0: CryptoVec) {
+    pub(crate) fn extended_data(&mut self, channel: ChannelId, ext: u32, buf0: CryptoVec) {
         use std::ops::Deref;
         if let Some(channel) = self.channels.get_mut(&channel) {
             assert!(channel.confirmed);
+
             if !channel.pending_data.is_empty() {
                 channel.pending_data.push_back((buf0, Some(ext), 0));
                 return;
             }
+
             let mut buf = if buf0.len() as u32 > channel.recipient_window_size {
                 &buf0[0..channel.recipient_window_size as usize]
             } else {
                 &buf0
             };
+
             let buf_len = buf.len();
 
-            while buf.len() > 0 {
+            while !buf.is_empty() {
                 // Compute the length we're allowed to send.
                 let off = std::cmp::min(buf.len(), channel.recipient_maximum_packet_size as usize);
+
                 push_packet!(self.write, {
                     self.write.push(msg::CHANNEL_EXTENDED_DATA);
                     self.write.push_u32_be(channel.recipient_channel);
                     self.write.push_u32_be(ext);
                     self.write.extend_ssh_string(&buf[..off]);
                 });
+
                 debug!("buffer: {:?}", self.write.deref().len());
+
                 channel.recipient_window_size -= off as u32;
+
                 buf = &buf[off..]
             }
+
             debug!("buf.len() = {:?}, buf_len = {:?}", buf.len(), buf_len);
+
             if buf_len < buf0.len() {
                 channel.pending_data.push_back((buf0, Some(ext), buf_len))
             }
         }
     }
 
-    pub fn flush(
+    pub(crate) fn flush(
         &mut self,
         limits: &Limits,
         cipher: &cipher::CipherPair,
@@ -333,7 +360,7 @@ impl Encrypted {
         let dur = now.duration_since(self.last_rekey);
         write_buffer.bytes >= limits.rekey_write_limit || dur >= limits.rekey_time_limit
     }
-    pub fn new_channel_id(&mut self) -> ChannelId {
+    pub(crate) fn new_channel_id(&mut self) -> ChannelId {
         self.last_channel_id += Wrapping(1);
         while self
             .channels
@@ -343,7 +370,7 @@ impl Encrypted {
         }
         ChannelId(self.last_channel_id.0)
     }
-    pub fn new_channel(&mut self, window_size: u32, maxpacket: u32) -> ChannelId {
+    pub(crate) fn new_channel(&mut self, window_size: u32, maxpacket: u32) -> ChannelId {
         loop {
             self.last_channel_id += Wrapping(1);
             if let std::collections::hash_map::Entry::Vacant(vacant_entry) =
@@ -367,7 +394,7 @@ impl Encrypted {
 }
 
 #[derive(Debug)]
-pub enum EncryptedState {
+pub(crate) enum EncryptedState {
     WaitingServiceRequest { sent: bool, accepted: bool },
     WaitingAuthRequest(auth::AuthRequest),
     InitCompression,
@@ -375,17 +402,17 @@ pub enum EncryptedState {
 }
 
 #[derive(Debug)]
-pub struct Exchange {
-    pub client_id: CryptoVec,
-    pub server_id: CryptoVec,
-    pub client_kex_init: CryptoVec,
-    pub server_kex_init: CryptoVec,
-    pub client_ephemeral: CryptoVec,
-    pub server_ephemeral: CryptoVec,
+pub(crate) struct Exchange {
+    pub(crate) client_id: CryptoVec,
+    pub(crate) server_id: CryptoVec,
+    pub(crate) client_kex_init: CryptoVec,
+    pub(crate) server_kex_init: CryptoVec,
+    pub(crate) client_ephemeral: CryptoVec,
+    pub(crate) server_ephemeral: CryptoVec,
 }
 
 impl Exchange {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Exchange {
             client_id: CryptoVec::new(),
             server_id: CryptoVec::new(),
@@ -398,7 +425,7 @@ impl Exchange {
 }
 
 #[derive(Debug)]
-pub enum Kex {
+pub(crate) enum Kex {
     /// Version number sent. `algo` and `sent` tell wether kexinit has
     /// been received, and sent, respectively.
     KexInit(KexInit),
@@ -415,15 +442,15 @@ pub enum Kex {
 }
 
 #[derive(Debug)]
-pub struct KexInit {
-    pub algo: Option<negotiation::Names>,
-    pub exchange: Exchange,
-    pub session_id: Option<crate::Sha256Hash>,
-    pub sent: bool,
+pub(crate) struct KexInit {
+    pub(crate) algo: Option<negotiation::Names>,
+    pub(crate) exchange: Exchange,
+    pub(crate) session_id: Option<crate::Sha256Hash>,
+    pub(crate) sent: bool,
 }
 
 impl KexInit {
-    pub fn received_rekey(
+    pub(crate) fn received_rekey(
         ex: Exchange,
         algo: negotiation::Names,
         session_id: &crate::Sha256Hash,
@@ -432,7 +459,7 @@ impl KexInit {
             exchange: ex,
             algo: Some(algo),
             sent: false,
-            session_id: Some(session_id.clone()),
+            session_id: Some(*session_id),
         };
         kexinit.exchange.client_kex_init.clear();
         kexinit.exchange.server_kex_init.clear();
@@ -446,7 +473,7 @@ impl KexInit {
             exchange: ex,
             algo: None,
             sent: true,
-            session_id: Some(session_id.clone()),
+            session_id: Some(*session_id),
         };
         kexinit.exchange.client_kex_init.clear();
         kexinit.exchange.server_kex_init.clear();
@@ -457,20 +484,20 @@ impl KexInit {
 }
 
 #[derive(Debug)]
-pub struct KexDh {
-    pub exchange: Exchange,
-    pub names: negotiation::Names,
-    pub key: usize,
-    pub session_id: Option<crate::Sha256Hash>,
+pub(crate) struct KexDh {
+    pub(crate) exchange: Exchange,
+    pub(crate) names: negotiation::Names,
+    pub(crate) key: usize,
+    pub(crate) session_id: Option<crate::Sha256Hash>,
 }
 
 #[derive(Debug)]
-pub struct KexDhDone {
-    pub exchange: Exchange,
-    pub kex: kex::Algorithm,
-    pub key: usize,
-    pub session_id: Option<crate::Sha256Hash>,
-    pub names: negotiation::Names,
+pub(crate) struct KexDhDone {
+    pub(crate) exchange: Exchange,
+    pub(crate) kex: kex::Algorithm,
+    pub(crate) key: usize,
+    pub(crate) session_id: Option<crate::Sha256Hash>,
+    pub(crate) names: negotiation::Names,
 }
 
 impl KexDhDone {
@@ -482,7 +509,7 @@ impl KexDhDone {
         let session_id = if let Some(session_id) = self.session_id {
             session_id
         } else {
-            hash.clone()
+            hash
         };
         // Now computing keys.
         let c = self
@@ -494,7 +521,7 @@ impl KexDhDone {
             kex: self.kex,
             key: self.key,
             cipher: c,
-            session_id: session_id,
+            session_id,
             received: false,
             sent: false,
         })
@@ -502,13 +529,13 @@ impl KexDhDone {
 }
 
 #[derive(Debug)]
-pub struct NewKeys {
-    pub exchange: Exchange,
-    pub names: negotiation::Names,
-    pub kex: kex::Algorithm,
-    pub key: usize,
-    pub cipher: cipher::CipherPair,
-    pub session_id: crate::Sha256Hash,
-    pub received: bool,
-    pub sent: bool,
+pub(crate) struct NewKeys {
+    pub(crate) exchange: Exchange,
+    pub(crate) names: negotiation::Names,
+    pub(crate) kex: kex::Algorithm,
+    pub(crate) key: usize,
+    pub(crate) cipher: cipher::CipherPair,
+    pub(crate) session_id: crate::Sha256Hash,
+    pub(crate) received: bool,
+    pub(crate) sent: bool,
 }

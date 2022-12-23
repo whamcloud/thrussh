@@ -71,12 +71,12 @@ pub fn decode_openssh(secret: &[u8], password: Option<&str>) -> Result<key::KeyP
                     });
                 }
             } else {
-                return Err(Error::UnsupportedKeyType(key_type.to_vec()).into());
+                return Err(Error::UnsupportedKeyType(key_type.to_vec()));
             }
         }
-        Err(Error::CouldNotReadKey.into())
+        Err(Error::CouldNotReadKey)
     } else {
-        Err(Error::CouldNotReadKey.into())
+        Err(Error::CouldNotReadKey)
     }
 }
 
@@ -96,14 +96,14 @@ fn decrypt_secret_key(
         if password.is_none() {
             Ok(secret_key.to_vec())
         } else {
-            Err(Error::CouldNotReadKey.into())
+            Err(Error::CouldNotReadKey)
         }
     } else if let Some(password) = password {
         let mut key = [0; 48];
         let n = match ciphername {
             b"aes128-cbc" | b"aes128-ctr" => 32,
             b"aes256-cbc" | b"aes256-ctr" => 48,
-            _ => return Err(Error::CouldNotReadKey.into()),
+            _ => return Err(Error::CouldNotReadKey),
         };
         match kdfname {
             b"bcrypt" => {
@@ -113,7 +113,7 @@ fn decrypt_secret_key(
                 bcrypt_pbkdf::bcrypt_pbkdf(password, salt, rounds, &mut key[..n]).unwrap();
             }
             _kdfname => {
-                return Err(Error::CouldNotReadKey.into());
+                return Err(Error::CouldNotReadKey);
             }
         };
         let (key, iv) = key.split_at(n - 16);
@@ -147,6 +147,6 @@ fn decrypt_secret_key(
         }
         Ok(dec)
     } else {
-        Err(Error::KeyIsEncrypted.into())
+        Err(Error::KeyIsEncrypted)
     }
 }

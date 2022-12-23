@@ -92,7 +92,7 @@ impl<R: AsyncRead + AsyncWrite + Unpin + Send + 'static> Signer
 }
 
 #[derive(Debug)]
-pub enum Method {
+pub(crate) enum Method {
     // None,
     Password { password: String },
     PublicKey { key: Arc<key::KeyPair> },
@@ -128,16 +128,16 @@ impl MethodSet {
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct AuthRequest {
-    pub methods: MethodSet,
-    pub partial_success: bool,
-    pub current: Option<CurrentRequest>,
-    pub rejection_count: usize,
+pub(crate) struct AuthRequest {
+    pub(crate) methods: MethodSet,
+    pub(crate) partial_success: bool,
+    pub(crate) current: Option<CurrentRequest>,
+    pub(crate) rejection_count: usize,
 }
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub enum CurrentRequest {
+pub(crate) enum CurrentRequest {
     PublicKey {
         key: CryptoVec,
         algo: CryptoVec,

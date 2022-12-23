@@ -59,7 +59,7 @@ impl super::Session {
                     );
                     enc.rekey = Some(Kex::KexDhDone(kexinit.client_parse(
                         self.common.config.as_ref(),
-                        &mut self.common.cipher,
+                        &self.common.cipher,
                         buf,
                         &mut self.common.write_buffer,
                     )?));
@@ -100,7 +100,7 @@ impl super::Session {
 
                     // Ok, NEWKEYS received, now encrypted.
                     enc.flush_all_pending();
-                    let mut pending = std::mem::replace(&mut self.pending_reads, Vec::new());
+                    let mut pending = std::mem::take(&mut self.pending_reads);
                     for p in pending.drain(..) {
                         self = self.process_packet(client, &p).await?
                     }
@@ -248,9 +248,8 @@ impl super::Session {
                                     .send(Reply::SignRequest { key, data: buf })
                                     .map_err(|_| Error::SendError)?;
                                 self.common.buffer = loop {
-                                    match self.receiver.recv().await {
-                                        Some(Msg::Signed { data }) => break data,
-                                        _ => {}
+                                    if let Some(Msg::Signed { data }) = self.receiver.recv().await {
+                                        break data;
                                     }
                                 };
                                 if self.common.buffer.len() != len {
@@ -372,7 +371,7 @@ impl super::Session {
                         }
                     }
                 }
-                let (c, s) = c.data(channel_num, &data, self).await?;
+                let (c, s) = c.data(channel_num, data, self).await?;
                 *client = Some(c);
                 Ok(s)
             }
@@ -393,7 +392,7 @@ impl super::Session {
                     }
                 }
                 let (c, s) = c
-                    .extended_data(channel_num, extended_code, &data, self)
+                    .extended_data(channel_num, extended_code, data, self)
                     .await?;
                 *client = Some(c);
                 Ok(s)
@@ -478,6 +477,7 @@ impl super::Session {
                 let channel_num = ChannelId(r.read_u32().map_err(crate::Error::from)?);
                 let amount = r.read_u32().map_err(crate::Error::from)?;
                 let mut new_value = 0;
+
                 debug!("amount: {:?}", amount);
                 if let Some(ref mut enc) = self.common.encrypted {
                     if let Some(ref mut channel) = enc.channels.get_mut(&channel_num) {
@@ -621,17 +621,15 @@ impl Encrypted {
         method: &auth::Method,
         buffer: &mut CryptoVec,
     ) -> Result<(), Error> {
-        match method {
-            &auth::Method::PublicKey { ref key } => {
-                let i0 = self.client_make_to_sign(user, key.as_ref(), buffer);
-                // Extend with self-signature.
-                key.add_self_signature(buffer)?;
-                push_packet!(self.write, {
-                    self.write.extend(&buffer[i0..]);
-                })
-            }
-            _ => {}
+        if let &auth::Method::PublicKey { ref key } = method {
+            let i0 = self.client_make_to_sign(user, key.as_ref(), buffer);
+            // Extend with self-signature.
+            key.add_self_signature(buffer)?;
+            push_packet!(self.write, {
+                self.write.extend(&buffer[i0..]);
+            })
         }
+
         Ok(())
     }
 }

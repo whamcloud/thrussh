@@ -34,12 +34,12 @@ impl KexInit {
             let next_kex = if key < config.keys.len() {
                 Kex::KexDh(KexDh {
                     exchange: self.exchange,
-                    key: key,
+                    key,
                     names: algo,
                     session_id: self.session_id,
                 })
             } else {
-                return Err(Error::UnknownKey.into());
+                return Err(Error::UnknownKey);
             };
 
             Ok(next_kex)
@@ -64,7 +64,7 @@ impl KexInit {
 }
 
 impl KexDh {
-    pub fn parse(
+    pub(crate) fn parse(
         mut self,
         config: &Config,
         cipher: &CipherPair,
@@ -85,7 +85,7 @@ impl KexDh {
             // can output it immediately when the time comes.
             let kexdhdone = KexDhDone {
                 exchange: self.exchange,
-                kex: kex,
+                kex,
                 key: self.key,
                 names: self.names,
                 session_id: self.session_id,
@@ -109,7 +109,7 @@ impl KexDh {
                 debug!("signing with key {:?}", kexdhdone.key);
                 debug!("hash: {:?}", hash);
                 debug!("key: {:?}", config.keys[kexdhdone.key]);
-                config.keys[kexdhdone.key].add_signature(&mut buffer, &hash)?;
+                config.keys[kexdhdone.key].add_signature(&mut buffer, hash)?;
                 cipher.write(&buffer, write_buffer);
                 cipher.write(&[msg::NEWKEYS], write_buffer);
                 Ok(hash)

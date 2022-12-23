@@ -18,7 +18,6 @@ use byteorder::{BigEndian, ByteOrder};
 use crate::session::Exchange;
 use cryptovec::CryptoVec;
 use rand::RngCore;
-use sodium;
 use std::cell::RefCell;
 use thrussh_keys::encoding::Encoding;
 
@@ -58,7 +57,7 @@ thread_local! {
 
 impl Algorithm {
     #[doc(hidden)]
-    pub fn server_dh(
+    pub(crate) fn server_dh(
         _name: Name,
         exchange: &mut Exchange,
         payload: &[u8],
@@ -67,7 +66,7 @@ impl Algorithm {
 
         let mut client_pubkey = GroupElement([0; 32]);
         {
-            if payload.get(0) != Some(&msg::KEX_ECDH_INIT) {
+            if payload.first() != Some(&msg::KEX_ECDH_INIT) {
                 return Err(crate::Error::Inconsistent);
             }
 
@@ -135,7 +134,7 @@ impl Algorithm {
         Ok(())
     }
 
-    pub fn compute_exchange_hash<K: key::PubKey>(
+    pub(crate) fn compute_exchange_hash<K: key::PubKey>(
         &self,
         key: &K,
         exchange: &Exchange,
@@ -162,7 +161,7 @@ impl Algorithm {
         Ok(hasher.finalize())
     }
 
-    pub fn compute_keys(
+    pub(crate) fn compute_keys(
         &self,
         session_id: &crate::Sha256Hash,
         exchange_hash: &crate::Sha256Hash,

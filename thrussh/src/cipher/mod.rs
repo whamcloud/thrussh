@@ -17,25 +17,25 @@ use crate::Error;
 use byteorder::{BigEndian, ByteOrder};
 use std::num::Wrapping;
 use tokio::io::{AsyncRead, AsyncReadExt};
-pub mod aes256gcm;
-pub mod chacha20poly1305;
-pub mod clear;
+pub(crate) mod aes256gcm;
+pub(crate) mod chacha20poly1305;
+pub(crate) mod clear;
 
-pub struct Cipher {
-    pub name: Name,
-    pub key_len: usize,
-    pub nonce_len: usize,
-    pub make_opening_cipher: fn(key: &[u8], nonce: &[u8]) -> OpeningCipher,
-    pub make_sealing_cipher: fn(key: &[u8], nonce: &[u8]) -> SealingCipher,
+pub(crate) struct Cipher {
+    pub(crate) name: Name,
+    pub(crate) key_len: usize,
+    pub(crate) nonce_len: usize,
+    pub(crate) make_opening_cipher: fn(key: &[u8], nonce: &[u8]) -> OpeningCipher,
+    pub(crate) make_sealing_cipher: fn(key: &[u8], nonce: &[u8]) -> SealingCipher,
 }
 
-pub enum OpeningCipher {
+pub(crate) enum OpeningCipher {
     Clear(clear::Key),
     Chacha20Poly1305(chacha20poly1305::OpeningKey),
     AES256GCM(aes256gcm::OpeningKey),
 }
 
-impl<'a> OpeningCipher {
+impl OpeningCipher {
     fn as_opening_key(&self) -> &dyn OpeningKey {
         match *self {
             OpeningCipher::Clear(ref key) => key,
@@ -45,7 +45,7 @@ impl<'a> OpeningCipher {
     }
 }
 
-pub enum SealingCipher {
+pub(crate) enum SealingCipher {
     Clear(clear::Key),
     Chacha20Poly1305(chacha20poly1305::SealingKey),
     AES256GCM(aes256gcm::SealingKey),
@@ -69,9 +69,9 @@ impl AsRef<str> for Name {
     }
 }
 
-pub struct CipherPair {
-    pub local_to_remote: SealingCipher,
-    pub remote_to_local: OpeningCipher,
+pub(crate) struct CipherPair {
+    pub(crate) local_to_remote: SealingCipher,
+    pub(crate) remote_to_local: OpeningCipher,
 }
 
 impl std::fmt::Debug for CipherPair {
@@ -80,12 +80,12 @@ impl std::fmt::Debug for CipherPair {
     }
 }
 
-pub const CLEAR_PAIR: CipherPair = CipherPair {
+pub(crate) const CLEAR_PAIR: CipherPair = CipherPair {
     local_to_remote: SealingCipher::Clear(clear::Key),
     remote_to_local: OpeningCipher::Clear(clear::Key),
 };
 
-pub trait OpeningKey {
+pub(crate) trait OpeningKey {
     fn decrypt_packet_length(&self, seqn: u32, encrypted_packet_length: [u8; 4]) -> [u8; 4];
 
     fn tag_len(&self) -> usize;
@@ -98,7 +98,7 @@ pub trait OpeningKey {
     ) -> Result<&'a [u8], Error>;
 }
 
-pub trait SealingKey {
+pub(crate) trait SealingKey {
     fn padding_length(&self, plaintext: &[u8]) -> usize;
 
     fn fill_padding(&self, padding_out: &mut [u8]);
@@ -108,7 +108,7 @@ pub trait SealingKey {
     fn seal(&self, seqn: u32, plaintext_in_ciphertext_out: &mut [u8], tag_out: &mut [u8]);
 }
 
-pub async fn read<'a, R: AsyncRead + Unpin>(
+pub(crate) async fn read<'a, R: AsyncRead + Unpin>(
     stream: &'a mut R,
     buffer: &'a mut SSHBuffer,
     pair: &'a CipherPair,
@@ -157,7 +157,7 @@ pub async fn read<'a, R: AsyncRead + Unpin>(
 }
 
 impl CipherPair {
-    pub fn write(&self, payload: &[u8], buffer: &mut SSHBuffer) {
+    pub(crate) fn write(&self, payload: &[u8], buffer: &mut SSHBuffer) {
         // https://tools.ietf.org/html/rfc4253#section-6
         //
         // The variables `payload`, `packet_length` and `padding_length` refer
@@ -194,7 +194,7 @@ impl CipherPair {
     }
 }
 
-pub const PACKET_LENGTH_LEN: usize = 4;
+pub(crate) const PACKET_LENGTH_LEN: usize = 4;
 
 const MINIMUM_PACKET_LEN: usize = 16;
 

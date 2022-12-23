@@ -17,17 +17,17 @@ use super::*;
 use std::num::Wrapping;
 
 #[derive(Debug)]
-pub struct SSHBuffer {
-    pub buffer: CryptoVec,
-    pub len: usize, // next packet length.
-    pub bytes: usize,
+pub(crate) struct SSHBuffer {
+    pub(crate) buffer: CryptoVec,
+    pub(crate) len: usize, // next packet length.
+    pub(crate) bytes: usize,
     // Sequence numbers are on 32 bits and wrap.
     // https://tools.ietf.org/html/rfc4253#section-6.4
-    pub seqn: Wrapping<u32>,
+    pub(crate) seqn: Wrapping<u32>,
 }
 
 impl SSHBuffer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         SSHBuffer {
             buffer: CryptoVec::new(),
             len: 0,
@@ -36,7 +36,7 @@ impl SSHBuffer {
         }
     }
 
-    pub fn send_ssh_id(&mut self, id: &[u8]) {
+    pub(crate) fn send_ssh_id(&mut self, id: &[u8]) {
         self.buffer.extend(id);
         self.buffer.push(b'\r');
         self.buffer.push(b'\n');

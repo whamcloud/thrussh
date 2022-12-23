@@ -20,7 +20,7 @@ pub use self::pkcs5::*;
 
 pub mod pkcs8;
 
-const AES_128_CBC: &'static str = "DEK-Info: AES-128-CBC,";
+const AES_128_CBC: &str = "DEK-Info: AES-128-CBC,";
 
 #[derive(Clone, Copy, Debug)]
 /// AES encryption key.
@@ -50,7 +50,7 @@ pub fn decode_secret_key(secret: &str, password: Option<&str>) -> Result<key::Ke
         let mut started = false;
         let mut sec = String::new();
         for l in secret.lines() {
-            if started == true {
+            if started {
                 if l.starts_with("-----END ") {
                     break;
                 }
@@ -100,7 +100,7 @@ pub fn decode_secret_key(secret: &str, password: Option<&str>) -> Result<key::Ke
         Some(Format::Pkcs8Encrypted) | Some(Format::Pkcs8) => {
             self::pkcs8::decode_pkcs8(&secret, password.map(|x| x.as_bytes()))
         }
-        None => Err(Error::CouldNotReadKey.into()),
+        None => Err(Error::CouldNotReadKey),
     }
 }
 
