@@ -765,7 +765,7 @@ impl Channel {
         loop {
             match self.receiver.recv().await {
                 Some(OpenChannelMsg::Msg(ChannelMsg::WindowAdjusted { new_size })) => {
-                    self.window_size += new_size;
+                    self.window_size = new_size;
                     return Some(ChannelMsg::WindowAdjusted { new_size });
                 }
                 Some(OpenChannelMsg::Msg(msg)) => return Some(msg),
