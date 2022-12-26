@@ -19,18 +19,18 @@ use super::super::Error;
 use byteorder::{BigEndian, ByteOrder};
 use sodium::chacha20::*;
 
-pub struct OpeningKey {
+pub(crate) struct OpeningKey {
     k1: Key,
     k2: Key,
 }
-pub struct SealingKey {
+pub(crate) struct SealingKey {
     k1: Key,
     k2: Key,
 }
 
 const TAG_LEN: usize = 16;
 
-pub static CIPHER: super::Cipher = super::Cipher {
+pub(crate) static CIPHER: super::Cipher = super::Cipher {
     name: NAME,
     key_len: 64,
     nonce_len: 0,
@@ -38,7 +38,7 @@ pub static CIPHER: super::Cipher = super::Cipher {
     make_opening_cipher,
 };
 
-pub const NAME: super::Name = super::Name("chacha20-poly1305@openssh.com");
+pub(crate) const NAME: super::Name = super::Name("chacha20-poly1305@openssh.com");
 
 fn make_sealing_cipher(k: &[u8], _: &[u8]) -> super::SealingCipher {
     let mut k1 = Key([0; KEY_BYTES]);
@@ -91,7 +91,7 @@ impl super::OpeningKey for OpeningKey {
             chacha20_xor(&mut poly_key.0, &nonce, &self.k2);
             // let mut tag_ = Tag([0; 16]);
             // tag_.0.clone_from_slice(tag);
-            if !poly1305_verify(&tag, ciphertext_in_plaintext_out, &poly_key) {
+            if !poly1305_verify(tag, ciphertext_in_plaintext_out, &poly_key) {
                 return Err(Error::PacketAuth);
             }
         }

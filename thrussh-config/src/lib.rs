@@ -148,17 +148,10 @@ pub fn parse(file: &str, host: &str) -> Result<Config, Error> {
                         debug!("{:?}", key);
                     }
                 }
-            } else {
-                match lower.as_str() {
-                    "host" => {
-                        if value.trim_start() == host {
-                            let mut c = Config::default(host);
-                            c.port = 22;
-                            config = Some(c)
-                        }
-                    }
-                    _ => {}
-                }
+            } else if lower.as_str() == "host" && value.trim_start() == host {
+                let mut c = Config::default(host);
+                c.port = 22;
+                config = Some(c)
             }
         }
     }

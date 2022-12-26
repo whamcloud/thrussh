@@ -13,18 +13,18 @@ use std::borrow::Cow;
 use yasna;
 use yasna::BERReaderSeq;
 
-const PBES2: &'static [u64] = &[1, 2, 840, 113549, 1, 5, 13];
-const PBKDF2: &'static [u64] = &[1, 2, 840, 113549, 1, 5, 12];
-const HMAC_SHA256: &'static [u64] = &[1, 2, 840, 113549, 2, 9];
-const AES256CBC: &'static [u64] = &[2, 16, 840, 1, 101, 3, 4, 1, 42];
-const ED25519: &'static [u64] = &[1, 3, 101, 112];
+const PBES2: &[u64] = &[1, 2, 840, 113549, 1, 5, 13];
+const PBKDF2: &[u64] = &[1, 2, 840, 113549, 1, 5, 12];
+const HMAC_SHA256: &[u64] = &[1, 2, 840, 113549, 2, 9];
+const AES256CBC: &[u64] = &[2, 16, 840, 1, 101, 3, 4, 1, 42];
+const ED25519: &[u64] = &[1, 3, 101, 112];
 #[cfg(feature = "openssl")]
-const RSA: &'static [u64] = &[1, 2, 840, 113549, 1, 1, 1];
+const RSA: &[u64] = &[1, 2, 840, 113549, 1, 1, 1];
 
 /// Decode a PKCS#8-encoded private key.
 pub fn decode_pkcs8(ciphertext: &[u8], password: Option<&[u8]>) -> Result<key::KeyPair, Error> {
     let secret = if let Some(pass) = password {
-        Cow::Owned(yasna::parse_der(&ciphertext, |reader| {
+        Cow::Owned(yasna::parse_der(ciphertext, |reader| {
             reader.read_sequence(|reader| {
                 // Encryption parameters
                 let parameters = reader.next().read_sequence(|reader| {
@@ -32,7 +32,7 @@ pub fn decode_pkcs8(ciphertext: &[u8], password: Option<&[u8]>) -> Result<key::K
                     if oid.components().as_slice() == PBES2 {
                         asn1_read_pbes2(reader)
                     } else {
-                        Ok(Err(Error::UnknownAlgorithm(oid)).into())
+                        Ok(Err(Error::UnknownAlgorithm(oid)))
                     }
                 })?;
                 // Ciphertext
@@ -51,7 +51,7 @@ pub fn decode_pkcs8(ciphertext: &[u8], password: Option<&[u8]>) -> Result<key::K
             } else if version == 1 {
                 Ok(read_key_v1(reader))
             } else {
-                Ok(Err(Error::CouldNotReadKey.into()))
+                Ok(Err(Error::CouldNotReadKey))
             }
         })
     })?
@@ -99,10 +99,7 @@ fn asn1_read_pbkdf2(
                 Ok(Err(Error::UnknownAlgorithm(oid)))
             }
         })?;
-        Ok(digest.map(|()| KeyDerivation::Pbkdf2 {
-            salt,
-            rounds,
-        }))
+        Ok(digest.map(|()| KeyDerivation::Pbkdf2 { salt, rounds }))
     })
 }
 
@@ -129,7 +126,7 @@ fn write_key_v1(writer: &mut yasna::DERWriterSeq, secret: &key::ed25519::SecretK
         .next()
         .write_tagged(yasna::Tag::context(1), |writer| {
             let public = &secret.key[32..];
-            writer.write_bitvec(&BitVec::from_bytes(&public))
+            writer.write_bitvec(&BitVec::from_bytes(public))
         })
 }
 
@@ -156,7 +153,7 @@ fn read_key_v1(reader: &mut BERReaderSeq) -> Result<key::KeyPair, Error> {
         };
         Ok(key::KeyPair::Ed25519(secret))
     } else {
-        Err(Error::CouldNotReadKey.into())
+        Err(Error::CouldNotReadKey)
     }
 }
 
@@ -243,7 +240,7 @@ fn read_key_v0(reader: &mut BERReaderSeq) -> Result<key::KeyPair, Error> {
 
 #[cfg(not(feature = "openssl"))]
 fn read_key_v0(_: &mut BERReaderSeq) -> Result<key::KeyPair, Error> {
-    Err(Error::CouldNotReadKey.into())
+    Err(Error::CouldNotReadKey)
 }
 
 #[test]
@@ -261,10 +258,10 @@ fn test_read_write_pkcs8() {
     }
 }
 
-use yasna::models::ObjectIdentifier;
 use aes::*;
 use block_modes::block_padding::NoPadding;
 use block_modes::BlockMode;
+use yasna::models::ObjectIdentifier;
 type Aes128Cbc = block_modes::Cbc<Aes128, NoPadding>;
 type Aes256Cbc = block_modes::Cbc<Aes256, NoPadding>;
 
@@ -321,7 +318,7 @@ fn clone(src: &[u8], dest: &mut [u8]) {
     let i = src.iter().take_while(|b| **b == 0).count();
     let src = &src[i..];
     let l = dest.len();
-    (&mut dest[l - src.len()..]).clone_from_slice(src)
+    dest[l - src.len()..].clone_from_slice(src)
 }
 
 fn asn1_write_pbes2(writer: yasna::DERWriter, rounds: u64, salt: &[u8], iv: &[u8]) {
@@ -376,13 +373,10 @@ impl Algorithms {
 impl KeyDerivation {
     fn derive(&self, password: &[u8], key: &mut [u8]) -> Result<(), Error> {
         match *self {
-            KeyDerivation::Pbkdf2 {
-                ref salt,
-                rounds,
-            } => {
+            KeyDerivation::Pbkdf2 { ref salt, rounds } => {
                 pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(password, salt, rounds as u32, key)
                 // pbkdf2_hmac(password, salt, rounds as usize, digest, key)?
-            },
+            }
         }
         Ok(())
     }
@@ -429,21 +423,18 @@ impl Encryption {
                 c.decrypt(&mut dec)?;
                 pkcs_unpad(&mut dec);
                 Ok(dec)
-            },
+            }
             Encryption::Aes256Cbc(ref iv) => {
                 let c = Aes256Cbc::new_from_slices(key, iv).unwrap();
                 let mut dec = ciphertext.to_vec();
                 c.decrypt(&mut dec)?;
                 pkcs_unpad(&mut dec);
                 Ok(dec)
-            },
+            }
         }
     }
 }
 
 enum KeyDerivation {
-    Pbkdf2 {
-        salt: Vec<u8>,
-        rounds: u64,
-    },
+    Pbkdf2 { salt: Vec<u8>, rounds: u64 },
 }

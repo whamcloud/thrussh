@@ -31,7 +31,7 @@ pub struct SealingKey {
 
 const TAG_LEN: usize = 16;
 
-pub static CIPHER: super::Cipher = super::Cipher {
+pub(crate) static CIPHER: super::Cipher = super::Cipher {
     name: NAME,
     key_len: KEY_BYTES,
     nonce_len: NONCE_BYTES,
@@ -39,7 +39,7 @@ pub static CIPHER: super::Cipher = super::Cipher {
     make_opening_cipher,
 };
 
-pub const NAME: super::Name = super::Name("aes256-gcm@openssh.com");
+pub(crate) const NAME: super::Name = super::Name("aes256-gcm@openssh.com");
 
 fn make_sealing_cipher(k: &[u8], n: &[u8]) -> super::SealingCipher {
     let mut key = Key([0; KEY_BYTES]);

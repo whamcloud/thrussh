@@ -272,13 +272,14 @@ impl<H: Handler> Handle<H> {
         mut future: S,
     ) -> (S, Result<bool, S::Error>) {
         let user = user.into();
-        if let Err(_) = self
+        if (self
             .sender
             .send(Msg::Authenticate {
                 user,
                 method: auth::Method::FuturePublicKey { key },
             })
-            .await
+            .await)
+            .is_err()
         {
             return (future, Err((crate::SendError {}).into()));
         }
@@ -292,9 +293,9 @@ impl<H: Handler> Handle<H> {
                     future = f;
                     let data = match data {
                         Ok(data) => data,
-                        Err(e) => return (future, Err(e.into())),
+                        Err(e) => return (future, Err(e)),
                     };
-                    if let Err(_) = self.sender.send(Msg::Signed { data }).await {
+                    if (self.sender.send(Msg::Signed { data }).await).is_err() {
                         return (future, Err((crate::SendError {}).into()));
                     }
                 }
@@ -326,7 +327,7 @@ impl<H: Handler> Handle<H> {
                     });
                 }
                 None => {
-                    return Err(Error::Disconnect.into());
+                    return Err(Error::Disconnect);
                 }
                 msg => {
                     debug!("msg = {:?}", msg);
@@ -689,12 +690,13 @@ impl Channel {
                     None => break,
                 }
             }
+
             debug!(
                 "sending data, self.window_size = {:?}, self.max_packet_size = {:?}, total = {:?}",
                 self.window_size, self.max_packet_size, total
             );
 
-            let sendable = self.window_size.min(self.max_packet_size) as usize;
+            let sendable = self.writable_packet_size();
 
             // If we can not send anymore, continue
             // and wait for server window adjustment
@@ -923,7 +925,7 @@ impl Session {
                         if buf[0] == crate::msg::DISCONNECT {
                             break;
                         } else if buf[0] > 4 {
-                            self = reply(self, &mut handler, &mut encrypted_signal, &buf[..]).await?;
+                            self = reply(self, &mut handler, &mut encrypted_signal, buf).await?;
                         }
                     }
                     reading.set(start_reading(stream_read, buffer, self.common.cipher.clone()));
@@ -1034,7 +1036,7 @@ impl Session {
             .client_id
             .extend(self.common.config.as_ref().client_id.as_bytes());
         let mut kexinit = KexInit {
-            exchange: exchange,
+            exchange,
             algo: None,
             sent: false,
             session_id: None,
@@ -1042,7 +1044,7 @@ impl Session {
         self.common.write_buffer.buffer.clear();
         kexinit.client_write(
             self.common.config.as_ref(),
-            &mut self.common.cipher,
+            &self.common.cipher,
             &mut self.common.write_buffer,
         )?;
         self.common.kex = Some(Kex::KexInit(kexinit));
@@ -1055,7 +1057,7 @@ impl Session {
         if let Some(ref mut enc) = self.common.encrypted {
             if enc.flush(
                 &self.common.config.as_ref().limits,
-                &mut self.common.cipher,
+                &self.common.cipher,
                 &mut self.common.write_buffer,
             ) {
                 info!("Re-exchanging keys");
@@ -1063,8 +1065,8 @@ impl Session {
                     if let Some(exchange) = std::mem::replace(&mut enc.exchange, None) {
                         let mut kexinit = KexInit::initiate_rekey(exchange, &enc.session_id);
                         kexinit.client_write(
-                            &self.common.config.as_ref(),
-                            &mut self.common.cipher,
+                            self.common.config.as_ref(),
+                            &self.common.cipher,
                             &mut self.common.write_buffer,
                         )?;
                         enc.rekey = Some(Kex::KexInit(kexinit))

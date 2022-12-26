@@ -140,7 +140,7 @@ impl PublicKey {
                 let key_bytes = p.read_string()?;
                 if key_algo != b"ssh-ed25519" || key_bytes.len() != sodium::ed25519::PUBLICKEY_BYTES
                 {
-                    return Err(Error::CouldNotReadKey.into());
+                    return Err(Error::CouldNotReadKey);
                 }
                 let mut p = sodium::ed25519::PublicKey {
                     key: [0; sodium::ed25519::PUBLICKEY_BYTES],
@@ -154,7 +154,10 @@ impl PublicKey {
                     let mut p = pubkey.reader(0);
                     let key_algo = p.read_string()?;
                     debug!("{:?}", std::str::from_utf8(key_algo));
-                    if key_algo != b"ssh-rsa" && key_algo != b"rsa-sha2-256" && key_algo != b"rsa-sha2-512" {
+                    if key_algo != b"ssh-rsa"
+                        && key_algo != b"rsa-sha2-256"
+                        && key_algo != b"rsa-sha2-512"
+                    {
                         return Err(Error::CouldNotReadKey.into());
                     }
                     let key_e = p.read_string()?;
@@ -183,7 +186,7 @@ impl PublicKey {
                     unreachable!()
                 }
             }
-            _ => Err(Error::CouldNotReadKey.into()),
+            _ => Err(Error::CouldNotReadKey),
         }
     }
 
@@ -200,7 +203,7 @@ impl PublicKey {
     pub fn verify_detached(&self, buffer: &[u8], sig: &[u8]) -> bool {
         match self {
             &PublicKey::Ed25519(ref public) => {
-                sodium::ed25519::verify_detached(&sig, buffer, &public)
+                sodium::ed25519::verify_detached(sig, buffer, public)
             }
             #[cfg(feature = "openssl")]
             &PublicKey::RSA { ref key, ref hash } => {
@@ -219,12 +222,11 @@ impl PublicKey {
     pub fn fingerprint(&self) -> String {
         use super::PublicKeyBase64;
         let key = self.public_key_bytes();
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(&key[..]);
         data_encoding::BASE64_NOPAD.encode(&hasher.finalize())
     }
-
 
     #[cfg(feature = "openssl")]
     pub fn set_algorithm(&mut self, algorithm: &[u8]) {
@@ -240,8 +242,7 @@ impl PublicKey {
     }
 
     #[cfg(not(feature = "openssl"))]
-    pub fn set_algorithm(&mut self, _: &[u8]) {
-    }
+    pub fn set_algorithm(&mut self, _: &[u8]) {}
 }
 
 impl Verify for PublicKey {
@@ -300,7 +301,7 @@ impl KeyPair {
                     key.n().to_owned().unwrap(),
                     key.e().to_owned().unwrap(),
                 )
-                    .unwrap();
+                .unwrap();
                 PublicKey::RSA {
                     key: OpenSSLPKey(PKey::from_rsa(key).unwrap()),
                     hash: hash.clone(),
@@ -335,7 +336,7 @@ impl KeyPair {
     pub fn sign_detached(&self, to_sign: &[u8]) -> Result<Signature, Error> {
         match self {
             &KeyPair::Ed25519(ref secret) => Ok(Signature::Ed25519(SignatureBytes(
-                sodium::ed25519::sign_detached(to_sign.as_ref(), secret).0,
+                sodium::ed25519::sign_detached(to_sign, secret).0,
             ))),
 
             #[cfg(feature = "openssl")]
@@ -383,7 +384,7 @@ impl KeyPair {
     pub fn add_self_signature(&self, buffer: &mut CryptoVec) -> Result<(), Error> {
         match self {
             &KeyPair::Ed25519(ref secret) => {
-                let signature = sodium::ed25519::sign_detached(&buffer, secret);
+                let signature = sodium::ed25519::sign_detached(buffer, secret);
                 buffer.push_u32_be((ED25519.0.len() + signature.0.len() + 8) as u32);
                 buffer.extend_ssh_string(ED25519.0.as_bytes());
                 buffer.extend_ssh_string(&signature.0);
@@ -457,5 +458,5 @@ pub fn parse_public_key(p: &[u8]) -> Result<PublicKey, Error> {
             });
         }
     }
-    Err(Error::CouldNotReadKey.into())
+    Err(Error::CouldNotReadKey)
 }
