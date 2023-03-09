@@ -28,6 +28,9 @@ include = [
     "src/signature.rs",
 ]
 
+[features]
+vendored = ["openssl/vendored"]
+
 [dependencies]
 data-encoding = "2.3"
 byteorder = "1.4"
