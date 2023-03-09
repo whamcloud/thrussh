@@ -40,6 +40,7 @@ edition = "2021"
 
 [features]
 default = ["flate2"]
+vendored = ["openssl/vendored"]
 
 [dependencies]
 byteorder = "1.3"
